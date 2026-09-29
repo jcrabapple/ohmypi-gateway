@@ -5,6 +5,7 @@ lifecycle against a live omp child, streaming over WebSocket with cursor
 resume, and the config round trip. Leaves no sessions running.
 """
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -210,6 +211,10 @@ try:
         "too-many": [{"type": "image", "data": png, "mimeType": "image/png"}] * 5,
         "too-big": [{"type": "image", "data": "A" * (7 * 1024 * 1024), "mimeType": "image/png"}],
         "not-a-list": "nope",
+        # Valid base64, wrong magic bytes: a PNG-labeled blob that is really text.
+        "magic-mismatch": [{"type": "image", "data": base64.b64encode(b"definitely not an image").decode(),
+                            "mimeType": "image/png"}],
+        "magic-gif-label": [{"type": "image", "data": png, "mimeType": "image/gif"}],
     }
     for name, imgs in bad.items():
         code, _, _ = req("POST", pp, {"message": "x", "images": imgs})

@@ -447,6 +447,21 @@ MAX_IMAGES = 4
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 IMAGE_MIME_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
+# Magic-byte signatures; the mime label alone is attacker-controlled.
+_IMAGE_MAGIC = {
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/webp": (b"RIFF",),  # plus "WEBP" at offset 8
+    "image/gif": (b"GIF87a", b"GIF89a"),
+}
+
+
+def _magic_ok(mime: str, blob: bytes) -> bool:
+    sigs = _IMAGE_MAGIC.get(mime, ())
+    if mime == "image/webp":
+        return len(blob) >= 12 and blob[:4] == b"RIFF" and blob[8:12] == b"WEBP"
+    return any(blob.startswith(s) for s in sigs)
+
 
 def parse_images(raw) -> list[dict]:
     if raw is None:
@@ -475,6 +490,9 @@ def parse_images(raw) -> list[dict]:
             raise HTTPException(422, f"images[{i}].data is empty")
         if len(decoded) > MAX_IMAGE_BYTES:
             raise HTTPException(422, f"images[{i}] is larger than {MAX_IMAGE_BYTES // (1024 * 1024)} MB")
+        if not _magic_ok(img["mimeType"], decoded):
+            raise HTTPException(422, f"images[{i}] does not look like a real {img['mimeType']} "
+                                     f"(magic bytes do not match)")
         out.append({"type": "image", "data": data, "mimeType": img["mimeType"]})
     return out
 
