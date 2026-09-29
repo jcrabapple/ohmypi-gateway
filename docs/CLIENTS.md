@@ -150,3 +150,31 @@ These make it feel like one product:
   away from the desk and keep the agent moving from their phone. That loop
   (notify, open, read the ask, answer, pocket) is the Android app's reason to
   exist. Optimize it before anything else.
+
+## Lessons from building the web client (phase 1)
+
+Things the web build proved or tripped over that the desktop and Android apps inherit:
+
+- **Reuse the web client's core, not just its looks.** `web/src/lib/api` (client, stream), `lib/transcript`
+  (the pure reducer) and `lib/render` have no DOM or Svelte dependencies in their logic and are covered by
+  tests against real captured payloads. A Capacitor or Tauri shell should wrap the same build; a native
+  rewrite should port these modules' behaviour and reuse their test fixtures as its conformance suite.
+- **History and live events must reduce to the same transcript.** This is the hardest correctness property
+  and the one most worth testing in any new client: feed `/messages` and the event stream of the same turn
+  through the reducer and compare.
+- **Model picker data comes from `/api/catalog/models`**, never the per-session RPC model list (minutes
+  slow). Cache it on the device.
+- **Session identity is the canonical session file path.** The gateway emits resolved paths; compare them
+  as given. Resuming a file that's already live returns `alreadyLive: true` with the existing session, so
+  clients can call resume blindly from a history list.
+- **Resume lands in the session's recorded folder** (`cwd` on saved entries). If `cwdFallback: true` comes
+  back, tell the user their tools are running in the default folder.
+- **Anything served through Cloudflare can be edge-cached** unless the gateway says `no-store` with the CDN
+  cache headers. Native apps don't have a service worker, but any update-check or config file they fetch
+  over plain HTTP needs the same treatment.
+- **Cloudflare rejects some encoded paths with 400** before the gateway sees them. Treat 400 from the edge
+  as "request refused", not as a gateway validation error.
+- **Notifications:** the web app asks for permission only from a user gesture and only fires when hidden.
+  The copy "desktop alert" reads wrong on phones; native apps should word it per platform.
+- **Keyboard-inset math and 44 px targets** are in `lib/platform/keyboard.ts` and the tokens; the Android
+  WebView behaves like mobile Chrome here, so a Capacitor shell gets this for free.
