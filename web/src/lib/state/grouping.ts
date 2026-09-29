@@ -18,7 +18,7 @@ const LABELS: Record<HistoryGroup['key'], string> = {
   today: 'Today',
   yesterday: 'Yesterday',
   week: 'Previous 7 days',
-  older: 'Older',
+  older: 'Earlier',
 };
 
 function startOfDay(ms: number): number {

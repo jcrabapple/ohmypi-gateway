@@ -7,6 +7,8 @@ class AuthStore {
   status = $state<AuthStatus>('unknown');
   busy = $state(false);
   error = $state<string | null>(null);
+  /** Seconds until the gateway lets this IP try again, when the last attempt hit the lockout (429). */
+  lockedSec = $state<number | null>(null);
 
   constructor() {
     onSignedOut(() => {
@@ -29,12 +31,14 @@ class AuthStore {
     if (this.busy) return false;
     this.busy = true;
     this.error = null;
+    this.lockedSec = null;
     try {
       await authApi.login(token.trim());
       this.status = 'signed-in';
       return true;
     } catch (e) {
       this.error = messageOf(e);
+      if (e instanceof ApiError && e.status === 429) this.lockedSec = e.retryAfterSec ?? 900;
       return false;
     } finally {
       this.busy = false;

@@ -1,7 +1,8 @@
 // Overlays, toasts and the confirm dialog. Overlays are a stack so Escape closes
 // the top one, and each remembers the element that opened it so focus can return.
 
-export type OverlayId = 'drawer' | 'palette' | 'new-session' | 'settings' | 'inspector' | 'shortcuts';
+export type OverlayId =
+  | 'drawer' | 'palette' | 'new-session' | 'settings' | 'inspector' | 'shortcuts' | 'session-info';
 
 export interface Toast {
   id: number;
@@ -29,6 +30,8 @@ class UiStore {
   toasts = $state<Toast[]>([]);
   confirmRequest = $state<(ConfirmRequest & { resolve: (ok: boolean) => void }) | null>(null);
   railCollapsed = $state(false);
+  /** The item the inspector overlay should show. Set by `inspect`. */
+  inspecting = $state.raw<unknown>(null);
 
   private nextToast = 1;
   private timers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -52,6 +55,12 @@ class UiStore {
     this.overlays = this.overlays.filter((o) => o !== entry);
     const opener = entry.opener;
     if (opener?.isConnected) queueMicrotask(() => opener.focus());
+  }
+
+  /** Show an item's raw source in the inspector overlay. */
+  inspect(raw: unknown): void {
+    this.inspecting = raw;
+    this.open('inspector');
   }
 
   /** Escape handler: closes the confirm dialog first, then the top overlay. Returns true if it handled the key. */

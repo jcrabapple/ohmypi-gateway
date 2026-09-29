@@ -1,0 +1,34 @@
+// Inline SVG icon set (24x24 grid, 1.6 stroke). Static markup, never model or user text.
+
+export const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+  'chevron-down': '<path d="M6 9l6 6 6-6"/>',
+  'chevron-right': '<path d="M9 6l6 6-6 6"/>',
+  'chevron-up': '<path d="M6 15l6-6 6 6"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  'panel-left': '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/>',
+  more: '<circle cx="5.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.3" fill="currentColor" stroke="none"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H16"/>',
+  sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+  'arrow-up': '<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>',
+  'arrow-down': '<path d="M12 5v14M5.5 12.5L12 19l6.5-6.5"/>',
+  stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor" stroke="none"/>',
+  paperclip: '<path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.2-8.2a3.4 3.4 0 0 1 4.8 4.8L9.9 17a1.8 1.8 0 0 1-2.6-2.6l7.2-7.2"/>',
+  image: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.4"/><path d="M4.5 17l4.5-4.5 3.5 3.5 2.5-2.5 4.5 4.5"/>',
+  pencil: '<path d="M4 20h3.6L19 8.6a2.5 2.5 0 0 0-3.6-3.6L4 16.4z"/>',
+  terminal: '<path d="M5 7l5 5-5 5M12 18h7"/>',
+  file: '<path d="M7 3.5h7l4.5 4.5v12.5H7z"/><path d="M14 3.5V8h4.5"/>',
+  sparkle: '<path d="M12 3.5l1.9 5.6 5.6 1.9-5.6 1.9L12 18.5l-1.9-5.6L4.5 11l5.6-1.9z"/>',
+  alert: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5M12 16v.4"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.6v.4"/>',
+  shield: '<path d="M12 3.5l7.5 2.8v5.4c0 4.4-3 7.7-7.5 9-4.5-1.3-7.5-4.6-7.5-9V6.3z"/>',
+  power: '<path d="M12 4v7"/><path d="M7 7.2a7 7 0 1 0 10 0"/>',
+  compress: '<path d="M5 9h4V5M19 9h-4V5M5 15h4v4M19 15h-4v4"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  mark: '<rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="M8.2 9.5l3 2.5-3 2.5M13 15h3"/>',
+} as const;
+
+export type IconName = keyof typeof ICONS;

@@ -7,9 +7,12 @@ import { emitSignedOut } from '../api/client';
 import { sessions as api, type PromptImage, type PromptMode } from '../api/endpoints';
 import { SessionStream, type StreamStatus } from '../api/stream';
 import type {
-  ControlEvent, OmpMessage, SessionInfo, SessionStatsData, SlashCommand, ThinkingLevel, UiAnswer,
+  ControlEvent, OmpEvent, OmpMessage, SessionInfo, SessionStatsData, SlashCommand, ThinkingLevel, UiAnswer,
+  UiRequest, UnknownEvent,
 } from '../api/types';
+import { isBlockingUi } from '../api/types';
 import { cacheKey, idbDelete, idbGet, idbSet } from '../platform/idb';
+import { notify } from '../platform/notify';
 import { emptyTranscript, reduce } from '../transcript/reducer';
 import type { TranscriptInput, TranscriptState } from '../transcript/types';
 import { sessionsStore } from './sessions.svelte';
@@ -18,6 +21,8 @@ export type Phase = 'idle' | 'loading' | 'ready' | 'gone' | 'error';
 
 const CACHED_MESSAGES = 200;
 const STATS_DEBOUNCE_MS = 600;
+/** Streaming deltas are applied at most once per frame, or after this long in a background tab. */
+const COALESCE_FALLBACK_MS = 80;
 
 let localCounter = 0;
 
@@ -30,6 +35,8 @@ class ActiveSession {
   connection = $state.raw<StreamStatus>({ state: 'offline', retryAt: null, message: null });
   stats = $state.raw<SessionStatsData | null>(null);
   commands = $state.raw<SlashCommand[]>([]);
+  /** Messages omp is holding for after the current turn (from /state). */
+  queued = $state(0);
   /** Set when omp reports a websocket-level error for this session. Cleared on the next send. */
   wsError = $state<string | null>(null);
 
@@ -39,6 +46,9 @@ class ActiveSession {
   private stream: SessionStream | null = null;
   private generation = 0;
   private statsTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingEvents: { event: OmpEvent | UnknownEvent; at: number }[] = [];
+  private frame = 0;
+  private frameTimer: ReturnType<typeof setTimeout> | null = null;
 
   async open(gwId: string): Promise<void> {
     if (this.gwId === gwId && this.phase !== 'error' && this.phase !== 'gone') return;
@@ -57,6 +67,7 @@ class ActiveSession {
       this.startStream(gwId, snap.info.lastEventSeq, gen);
       void this.loadCommands();
       void this.refreshStats();
+      void this.refreshQueued();
     } catch (e) {
       if (gen !== this.generation) return;
       const status = (e as { status?: number }).status;
@@ -71,6 +82,8 @@ class ActiveSession {
     this.stream = null;
     if (this.statsTimer) clearTimeout(this.statsTimer);
     this.statsTimer = null;
+    this.cancelFlush();
+    this.pendingEvents = [];
     this.gwId = null;
     this.phase = 'idle';
     this.error = null;
@@ -78,6 +91,7 @@ class ActiveSession {
     this.transcript = emptyTranscript();
     this.stats = null;
     this.commands = [];
+    this.queued = 0;
     this.wsError = null;
     this.connection = { state: 'offline', retryAt: null, message: null };
   }
@@ -95,7 +109,10 @@ class ActiveSession {
     this.dispatch({ kind: 'local-send', localId, text, mode, images });
     try {
       const info = await api.prompt(gwId, text, mode, images);
-      if (this.gwId === gwId) this.setInfo(info);
+      if (this.gwId === gwId) {
+        this.setInfo(info);
+        if (mode !== 'prompt') void this.refreshQueued();
+      }
       return true;
     } catch (e) {
       if (this.gwId === gwId) {
@@ -105,6 +122,14 @@ class ActiveSession {
       }
       return false;
     }
+  }
+
+  /** Remove a dialog locally, e.g. after answering it or after someone else beat us to it (409). */
+  dropUi(requestId: string): void {
+    this.dispatch({
+      kind: 'pending-ui',
+      requests: this.transcript.pendingUi.filter((u: UiRequest) => u.id !== requestId),
+    });
   }
 
   abort(): Promise<unknown> {
@@ -154,6 +179,17 @@ class ActiveSession {
       if (this.gwId === gwId) this.stats = r.data;
     } catch {
       /* stats are optional */
+    }
+  }
+
+  async refreshQueued(): Promise<void> {
+    const gwId = this.gwId;
+    if (!gwId) return;
+    try {
+      const st = await api.state(gwId);
+      if (this.gwId === gwId) this.queued = st.queuedMessageCount ?? 0;
+    } catch {
+      /* the count is a courtesy */
     }
   }
 
@@ -213,9 +249,7 @@ class ActiveSession {
       gwId,
       after,
       onEvent: (event) => {
-        if (gen !== this.generation) return;
-        this.dispatch({ kind: 'event', event, at: Date.now() });
-        if (event.type === 'agent_end') this.scheduleStats();
+        if (gen === this.generation) this.enqueue(event);
       },
       onControl: (frame) => {
         if (gen === this.generation) this.onControl(frame);
@@ -233,6 +267,57 @@ class ActiveSession {
     });
     this.stream = stream;
     stream.start();
+  }
+
+  /**
+   * Streaming deltas each carry the whole message, so only the newest one per message matters.
+   * They are applied once per frame; every other event flushes the queue first and applies in order.
+   */
+  private enqueue(event: OmpEvent | UnknownEvent): void {
+    const at = Date.now();
+    const key = coalesceKey(event);
+    if (key) {
+      const last = this.pendingEvents.at(-1);
+      if (last && coalesceKey(last.event) === key) this.pendingEvents[this.pendingEvents.length - 1] = { event, at };
+      else this.pendingEvents.push({ event, at });
+      if (!this.frame && !this.frameTimer) {
+        this.frame = requestAnimationFrame(() => this.flush());
+        this.frameTimer = setTimeout(() => this.flush(), COALESCE_FALLBACK_MS);
+      }
+      return;
+    }
+    this.pendingEvents.push({ event, at });
+    this.flush();
+  }
+
+  private cancelFlush(): void {
+    if (this.frame) cancelAnimationFrame(this.frame);
+    if (this.frameTimer) clearTimeout(this.frameTimer);
+    this.frame = 0;
+    this.frameTimer = null;
+  }
+
+  private flush(): void {
+    this.cancelFlush();
+    const batch = this.pendingEvents;
+    this.pendingEvents = [];
+    if (!batch.length) return;
+    let next = this.transcript;
+    for (const { event, at } of batch) next = reduce(next, { kind: 'event', event, at });
+    this.transcript = next;
+    for (const { event } of batch) this.afterEvent(event);
+  }
+
+  private afterEvent(event: OmpEvent | UnknownEvent): void {
+    if (event.type === 'agent_end') {
+      this.scheduleStats();
+    } else if (event.type === 'available_commands_update') {
+      const commands = (event as { commands?: SlashCommand[] }).commands;
+      if (Array.isArray(commands)) this.commands = commands;
+    } else if (event.type === 'extension_ui_request' && isBlockingUi(event as { method: string })) {
+      const req = event as UiRequest;
+      notify({ title: 'omp needs you', body: (req.title ?? '').split('\n', 1)[0], tag: `ui:${req.id}` });
+    }
   }
 
   private onControl(frame: ControlEvent): void {
@@ -264,8 +349,16 @@ class ActiveSession {
     this.statsTimer = setTimeout(() => {
       void this.refreshStats();
       void this.refreshInfo();
+      void this.refreshQueued();
     }, STATS_DEBOUNCE_MS);
   }
+}
+
+function coalesceKey(event: OmpEvent | UnknownEvent): string | null {
+  const e = event as { type: string; messageId?: string; toolCallId?: string };
+  if (e.type === 'message_update') return `m:${e.messageId ?? ''}`;
+  if (e.type === 'tool_execution_update') return `t:${e.toolCallId ?? ''}`;
+  return null;
 }
 
 export const active = new ActiveSession();

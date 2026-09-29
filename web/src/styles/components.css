@@ -1,0 +1,199 @@
+/* Shared control styles: buttons, chips, fields, section labels. Components add layout on top. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: var(--hit);
+  padding: 0 var(--s-4);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--ring);
+  color: var(--ink);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), opacity var(--dur-fast);
+}
+.btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface) 88%, var(--ink));
+}
+.btn:active:not(:disabled) {
+  background: color-mix(in srgb, var(--surface) 80%, var(--ink));
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: none;
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled),
+.btn-primary:active:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.1);
+}
+.btn-ghost {
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink-2);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.btn-ghost:active:not(:disabled) {
+  background: var(--press);
+}
+.btn-danger {
+  color: var(--err);
+}
+.btn-sm {
+  min-height: 28px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-sm);
+}
+@media (pointer: coarse) {
+  .btn-sm {
+    min-height: var(--hit);
+  }
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--hit);
+  min-height: var(--hit);
+  border-radius: var(--r-md);
+  color: var(--ink-2);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.icon-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.icon-btn:active:not(:disabled) {
+  background: var(--press);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-height: 28px;
+  padding: 0 var(--s-3);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  max-width: 100%;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+button.chip {
+  box-shadow: var(--ring);
+}
+button.chip:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+button.chip[aria-expanded='true'] {
+  background: var(--press);
+  color: var(--ink);
+}
+@media (pointer: coarse) {
+  .chip {
+    min-height: var(--hit);
+  }
+}
+
+.field {
+  width: 100%;
+  min-height: var(--hit);
+  padding: 0 var(--s-3);
+  background: var(--field);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.field:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.eyebrow {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.scroll-y {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+/* Streaming caret after the last block of an assistant message. */
+.prose.streaming > :last-child::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: caret-blink 1.1s steps(1) infinite;
+}
+.prose.streaming > .code-block:last-child::after,
+.prose.streaming > .table-wrap:last-child::after {
+  display: block;
+  margin: var(--s-2) 0 0;
+}
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Unified diff colouring (lib/render/diff). Each line is a block so the tint spans the row. */
+.diff-add,
+.diff-del,
+.diff-hunk,
+.diff-meta,
+.diff-ctx {
+  display: block;
+  padding: 0 var(--s-3);
+  margin: 0 calc(var(--s-3) * -1);
+}
+.diff-add {
+  color: var(--ansi-2);
+  background: color-mix(in srgb, var(--ansi-2) 10%, transparent);
+}
+.diff-del {
+  color: var(--ansi-1);
+  background: color-mix(in srgb, var(--ansi-1) 10%, transparent);
+}
+.diff-hunk {
+  color: var(--ansi-6);
+}
+.diff-meta {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.diff-ctx {
+  color: var(--ink-2);
+}

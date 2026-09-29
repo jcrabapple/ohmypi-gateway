@@ -1,6 +1,8 @@
 export { active } from './active.svelte';
 export { auth } from './auth.svelte';
 export { groupSessions } from './grouping';
+export { modelCatalog } from './models.svelte';
+export { nav } from './nav.svelte';
 export { sessionsStore } from './sessions.svelte';
 export { settings } from './settings.svelte';
 export { ui } from './ui.svelte';

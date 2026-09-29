@@ -32,6 +32,13 @@
   --wide-w: 1100px;
   --hit: 32px;
 
+  --hover: color-mix(in srgb, var(--ink) 6%, transparent);
+  --press: color-mix(in srgb, var(--ink) 10%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
+  --err-soft: color-mix(in srgb, var(--err) 12%, transparent);
+
+  --composer-max: 40vh;
   --kb: 0px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
