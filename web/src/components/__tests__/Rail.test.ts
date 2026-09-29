@@ -17,7 +17,7 @@ function saved(file: string, ageDays: number): SavedSession {
   const d = new Date();
   d.setHours(12, 0, 0, 0);
   d.setDate(d.getDate() - ageDays);
-  return { file, mtime: d.getTime() / 1000, sizeBytes: 1, cwdFolder: '-work-x', title: `title ${file}`, running: false };
+  return { file, mtime: d.getTime() / 1000, sizeBytes: 1, cwdFolder: '-work-x', cwd: null, title: `title ${file}`, running: false };
 }
 
 beforeEach(() => {

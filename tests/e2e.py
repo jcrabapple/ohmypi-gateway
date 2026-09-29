@@ -7,7 +7,9 @@ resume, and the config round trip. Leaves no sessions running.
 import asyncio
 import json
 import os
+import shutil
 import sys
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -305,6 +307,59 @@ try:
     check("ui-resolved-event", any(e.get("type") == "ui_resolved" and e.get("id") == pend[0]["id"] for e in evs))
 finally:
     ok("DELETE", f"/api/sessions/{aid}")
+
+# ------------------------------------------- saved sessions: paths, cwd, resume
+
+saved = ok("GET", "/api/sessions?limit=200")["saved"]
+check("saved-files-canonical", bool(saved) and all(e["file"] == str(Path(e["file"]).resolve()) for e in saved),
+      f"{len(saved)} saved")
+check("saved-entries-have-cwd-key", all("cwd" in e for e in saved))
+
+probe_dir = Path(tempfile.mkdtemp(prefix="ompgw-e2e-", dir="/tmp")).resolve()
+live_ids: list[str] = []
+try:
+    first = ok("POST", "/api/sessions", {"cwd": str(probe_dir), "thinking": "off"})
+    live_ids.append(first["gwId"])
+    ok("POST", f"/api/sessions/{first['gwId']}/prompt",
+       {"message": "Reply with exactly: ok", "wait": True, "timeout": 90}, timeout=100)
+    live_file = ok("GET", f"/api/sessions/{first['gwId']}")["ompSessionFile"]
+    check("live-file-canonical", bool(live_file) and live_file == str(Path(live_file).resolve()), str(live_file))
+    mid = ok("GET", "/api/sessions?limit=200")
+    mine = [e for e in mid["saved"] if e.get("cwd") and Path(e["cwd"]).resolve() == probe_dir]
+    check("saved-cwd-parsed", len(mine) == 1, f"{len(mine)} saved with cwd {probe_dir}")
+    check("saved-file-equals-live-file", bool(mine) and mine[0]["file"] == live_file)
+    check("saved-running-true-while-live", bool(mine) and mine[0]["running"] is True)
+    ok("DELETE", f"/api/sessions/{first['gwId']}")
+    live_ids.remove(first["gwId"])
+    saved_file = mine[0]["file"] if mine else live_file
+
+    resumed = ok("POST", "/api/sessions", {"resumeFrom": saved_file, "thinking": "off"})
+    live_ids.append(resumed["gwId"])
+    check("resume-without-cwd-uses-saved-cwd", resumed["cwd"] == str(probe_dir) and not resumed.get("cwdFallback"),
+          resumed["cwd"])
+    check("resume-not-flagged-already-live", not resumed.get("alreadyLive"))
+    check("resume-reports-canonical-file", resumed["resumedFrom"] == saved_file)
+
+    code, again, _ = req("POST", "/api/sessions", {"resumeFrom": saved_file})
+    check("resume-live-file-already-live", code == 200 and again.get("alreadyLive") is True
+          and again.get("gwId") == resumed["gwId"], f"-> {code}")
+    live_now = ok("GET", "/api/sessions?include_saved=false")["live"]
+    check("resume-live-file-no-second-process", sum(1 for s_ in live_now if s_["ompSessionFile"] == saved_file
+                                                     or s_["resumedFrom"] == saved_file) == 1)
+    ok("DELETE", f"/api/sessions/{resumed['gwId']}")
+    live_ids.remove(resumed["gwId"])
+
+    shutil.rmtree(probe_dir)
+    fallback = ok("POST", "/api/sessions", {"resumeFrom": saved_file, "thinking": "off"})
+    live_ids.append(fallback["gwId"])
+    check("resume-missing-cwd-falls-back", fallback.get("cwdFallback") is True
+          and fallback["cwd"] == str(Path(os.path.expanduser("~/projects")).resolve()), fallback["cwd"])
+    ok("DELETE", f"/api/sessions/{fallback['gwId']}")
+    live_ids.remove(fallback["gwId"])
+finally:
+    for lid in live_ids:
+        req("DELETE", f"/api/sessions/{lid}")
+    shutil.rmtree(probe_dir, ignore_errors=True)
 
 check("stop-reaped", all(s["gwId"] != gid for s in ok("GET", "/api/sessions?include_saved=false")["live"]))
 

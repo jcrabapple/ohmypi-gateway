@@ -4,7 +4,7 @@
   import { openOverlay } from '../lib/overlays';
   import { basename, money, sessionTitle } from '../lib/format';
   import { active, sessionsStore, ui } from '../lib/state';
-  import { Icon, Menu, type MenuItem } from '../lib/ui';
+  import { Icon, InlineCode, Menu, type MenuItem } from '../lib/ui';
   import { viewport } from '../lib/ui/media.svelte';
   import ContextMeter from './ContextMeter.svelte';
 
@@ -130,7 +130,7 @@
       />
     {:else if info}
       <button bind:this={titleBtn} type="button" class="title" title="Rename" onclick={startRename}>
-        <span class="truncate">{title}</span>
+        <span class="truncate"><InlineCode text={title} /></span>
         <Icon name="pencil" size={13} />
       </button>
     {:else}

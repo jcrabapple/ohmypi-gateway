@@ -40,6 +40,7 @@ from .bridge import (
     ProcessDead,
     RpcError,
     get_manager,
+    read_session_cwd,
     scan_saved_sessions,
 )
 
@@ -489,8 +490,6 @@ async def list_sessions(include_saved: bool = True, limit: int = 100):
 async def create_session(request: Request):
     body = await json_body(request)
     await get_manager().reap_dead()
-    if len(get_manager().sessions) >= MAX_SESSIONS:
-        raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
     approval_mode = body.get("approvalMode", DEFAULT_APPROVAL_MODE)
     if approval_mode not in APPROVAL_MODES:
         raise HTTPException(422, "approvalMode must be always-ask|write|yolo")
@@ -500,14 +499,27 @@ async def create_session(request: Request):
     resume = body.get("resumeFrom")
     if resume:
         rp = Path(resume).expanduser().resolve()
-        if not rp.is_file() or (OMP_AGENT_DIR / "sessions").resolve() not in rp.parents:
+        if not rp.is_file() or (OMP_AGENT_DIR / "sessions") not in rp.parents:
             raise HTTPException(422, "resumeFrom must be a saved session file from /api/sessions")
         resume = str(rp)
-    cwd = body.get("cwd") or os.path.expanduser("~/projects")
+        existing = get_manager().find_by_file(resume)
+        if existing is not None:
+            return {**existing.info(), "alreadyLive": True}
+    if len(get_manager().sessions) >= MAX_SESSIONS:
+        raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
+    cwd = body.get("cwd")
+    cwd_fallback = False
+    if not cwd and resume:
+        saved_cwd = read_session_cwd(resume)
+        if saved_cwd and Path(saved_cwd).expanduser().is_dir():
+            cwd = saved_cwd
+        else:
+            cwd_fallback = True
+    cwd = cwd or os.path.expanduser("~/projects")
     sess = await get_manager().create(cwd=cwd, model=body.get("model") or None,
                                       thinking=thinking or None, approval_mode=approval_mode,
                                       session_file=resume)
-    return sess.info()
+    return {**sess.info(), **({"cwdFallback": True} if cwd_fallback else {})}
 
 
 @app.get("/api/sessions/{gw_id}")

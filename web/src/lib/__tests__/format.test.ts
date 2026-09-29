@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { basename, contextLevel, money, savedFolderLabel, sessionTitle, uniqueCwds, uptime } from '../format';
+import { basename, contextLevel, money, savedFolderLabel, savedTitle, sessionTitle, splitInlineCode, uniqueCwds, uptime } from '../format';
 
 describe('contextLevel', () => {
   it('is ok below 70, warn from 70, err from 85', () => {
@@ -31,6 +31,11 @@ describe('format helpers', () => {
     expect(savedFolderLabel({ cwdFolder: '-work-app' }, ['/home/me/work/app'])).toBe('app');
     expect(savedFolderLabel({ cwdFolder: '-work-app' }, [])).toBe('work-app');
   });
+  it('savedFolderLabel uses the recorded cwd when there is one', () => {
+    expect(savedFolderLabel({ cwdFolder: '-var-home-me-work-app', cwd: '/var/home/me/work/app' }, [])).toBe('app');
+    expect(savedFolderLabel({ cwdFolder: '-work-app', cwd: null }, [])).toBe('work-app');
+    expect(savedTitle({ title: '', cwdFolder: '-x', cwd: '/a/b' }, [])).toBe('b');
+  });
   it('uniqueCwds keeps first-seen order', () => {
     expect(uniqueCwds([{ cwd: '/a' }, { cwd: '/b' }, { cwd: '/a' }])).toEqual(['/a', '/b']);
   });
@@ -61,5 +66,27 @@ describe('uptime', () => {
     expect(uptime(12 * 60)).toBe('12m');
     expect(uptime(3 * 3600 + 5 * 60)).toBe('3h 5m');
     expect(uptime(2 * 86400 + 4 * 3600)).toBe('2d 4h');
+  });
+});
+
+describe('splitInlineCode', () => {
+  it('splits paired backticks into code parts', () => {
+    expect(splitInlineCode('Run `ls gateway` with bash')).toEqual([
+      { text: 'Run ', code: false },
+      { text: 'ls gateway', code: true },
+      { text: ' with bash', code: false },
+    ]);
+  });
+  it('handles several spans and edges', () => {
+    expect(splitInlineCode('`a` and `b`')).toEqual([
+      { text: 'a', code: true },
+      { text: ' and ', code: false },
+      { text: 'b', code: true },
+    ]);
+  });
+  it('leaves an unpaired or empty backtick alone', () => {
+    expect(splitInlineCode('cut `off here')).toEqual([{ text: 'cut `off here', code: false }]);
+    expect(splitInlineCode('a `` b')).toEqual([{ text: 'a `` b', code: false }]);
+    expect(splitInlineCode('')).toEqual([]);
   });
 });

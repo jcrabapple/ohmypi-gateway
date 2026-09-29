@@ -1,4 +1,5 @@
 <script lang="ts">
+  import InlineCode from '../lib/ui/InlineCode.svelte';
   import Spinner from '../lib/ui/Spinner.svelte';
   import StatusGlyph, { type SessionStatus } from './StatusGlyph.svelte';
 
@@ -24,7 +25,7 @@
     {/if}
   </span>
   <span class="text">
-    <span class="title truncate">{title}</span>
+    <span class="title truncate"><InlineCode text={title} /></span>
     <span class="sub truncate">{sub}</span>
   </span>
   {#if badge > 1}<span class="badge" aria-label="{badge} waiting">{badge}</span>{/if}

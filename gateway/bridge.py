@@ -25,7 +25,9 @@ from typing import Any, AsyncIterator
 log = logging.getLogger("ohmpi-gateway.bridge")
 
 OMP_BIN = os.path.expanduser("~/.bun/bin/omp")
-OMP_AGENT_DIR = Path(os.path.expanduser("~/.omp/agent"))
+# Resolved once: omp reports symlink-free paths (/home -> /var/home on Fedora
+# Atomic), so every session file path the gateway emits or compares is canonical.
+OMP_AGENT_DIR = Path(os.path.expanduser("~/.omp/agent")).resolve()
 
 APPROVAL_MODES = ("yolo", "write", "always-ask")
 DEFAULT_APPROVAL_MODE = os.environ.get("OMPGW_DEFAULT_APPROVAL", "yolo")
@@ -39,6 +41,39 @@ if DEFAULT_APPROVAL_MODE not in APPROVAL_MODES:
 UI_DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
 
 STDOUT_LINE_LIMIT = 64 * 1024 * 1024  # bytes per stdout line from omp
+
+def canonical_path(p: str | os.PathLike | None) -> str | None:
+    if not p:
+        return None
+    return str(Path(p).expanduser().resolve())
+
+
+def _cwd_from_lines(lines) -> str | None:
+    """cwd of the first {"type":"session"} line among the first ~20 lines."""
+    for i, line in enumerate(lines):
+        if i >= 20:
+            break
+        if '"session"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get("type") == "session":
+            cwd = obj.get("cwd")
+            return cwd if isinstance(cwd, str) and cwd else None
+    return None
+
+
+def read_session_cwd(path: str | os.PathLike) -> str | None:
+    """Working directory a saved omp session was recorded in, or None."""
+    try:
+        with open(path, "rb") as fh:
+            head = [fh.readline(1 << 20).decode("utf-8", "replace") for _ in range(20)]
+    except OSError:
+        return None
+    return _cwd_from_lines(head)
+
 
 class RpcError(Exception):
     """A command failed at the omp layer (success: false)."""
@@ -70,7 +105,7 @@ class OmpSession:
         self.requested_model = model
         self.requested_thinking = thinking
         self.approval_mode = approval_mode
-        self.resume_session_file = session_file
+        self.resume_session_file = canonical_path(session_file)
 
         self.created_at = time.time()
         self.exited = False
@@ -92,7 +127,7 @@ class OmpSession:
         self.streaming = False
 
         # Session metadata, filled from events / get_state.
-        self.omp_session_file: str | None = session_file
+        self._omp_session_file: str | None = self.resume_session_file
         self.omp_session_id: str | None = None
         self.omp_session_name: str | None = None
         self.model: dict | None = None
@@ -109,6 +144,14 @@ class OmpSession:
         self.proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
         self._stderr_path = OMP_AGENT_DIR / "gateway-logs" / f"{self.gw_id}.stderr.log"
+
+    @property
+    def omp_session_file(self) -> str | None:
+        return self._omp_session_file
+
+    @omp_session_file.setter
+    def omp_session_file(self, value: str | None) -> None:
+        self._omp_session_file = canonical_path(value)
 
     # --- start
 
@@ -523,6 +566,13 @@ class SessionManager:
             await sess.get_state()
         return sess
 
+    def find_by_file(self, session_file: str) -> OmpSession | None:
+        want = canonical_path(session_file)
+        for s in self.sessions.values():
+            if not s.exited and s.omp_session_file == want:
+                return s
+        return None
+
     def get(self, gw_id: str) -> OmpSession:
         sess = self.sessions.get(gw_id)
         if sess is None:
@@ -559,11 +609,13 @@ def scan_saved_sessions(limit: int = 200) -> list[dict]:
     files = sorted(root.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
     live_files = {s.omp_session_file for s in _manager.sessions.values() if s.omp_session_file}
     for p in files:
+        p = p.resolve()
         entry = {
             "file": str(p),
             "mtime": p.stat().st_mtime,
             "sizeBytes": p.stat().st_size,
             "cwdFolder": p.parent.name,
+            "cwd": None,
             "title": None,
             "running": str(p) in live_files,
         }
@@ -571,7 +623,9 @@ def scan_saved_sessions(limit: int = 200) -> list[dict]:
         try:
             with open(p, "rb") as fh:
                 head = fh.read(256 * 1024).decode("utf-8", "replace")
-            for line in head.splitlines():
+            lines = head.splitlines()
+            entry["cwd"] = _cwd_from_lines(lines)
+            for line in lines:
                 if not line.strip() or '"user"' not in line:
                     continue
                 try:

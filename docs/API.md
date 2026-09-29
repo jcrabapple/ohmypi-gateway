@@ -99,7 +99,7 @@ session is a transcript on disk that can be resumed.
 | Method | Path | |
 |---|---|---|
 | GET | `/sessions?limit=&include_saved=` | `{live: [...], saved: [...]}` |
-| POST | `/sessions` | start: `{cwd?, model?, thinking?, approvalMode?, resumeFrom?}`. `approvalMode` is `yolo` (default) \| `write` \| `always-ask`. `resumeFrom` must be a file under `~/.omp/agent/sessions` |
+| POST | `/sessions` | start: `{cwd?, model?, thinking?, approvalMode?, resumeFrom?}`. `approvalMode` is `yolo` (default) \| `write` \| `always-ask`. `resumeFrom` must be a file under `~/.omp/agent/sessions` (see Resuming below) |
 | GET | `/sessions/{id}` | session info (below) |
 | DELETE | `/sessions/{id}` | stop the child; transcript stays on disk |
 | POST | `/sessions/{id}/prompt` | `{message, images?, mode?, wait?, timeout?}`. `images` is up to 4 of `{"type":"image","data":"<base64>","mimeType":"image/png"|"image/jpeg"|"image/webp"|"image/gif"}` (max 5 MB decoded each; raw base64 only, no `data:` prefix) and is forwarded to omp on every mode. Bad type, mime, base64 or size is 422. `message` may be empty when images are present. `mode`: `prompt` \| `steer` (inject into the running turn) \| `follow_up` (queue for after it). Returns immediately with the ack; follow progress on the WebSocket. `wait:true` blocks until the turn ends and adds `lastAssistantText` (see note) |
@@ -125,7 +125,27 @@ scripts on the host and quick one-liners.
 The `rpc` passthrough means a client never waits on a gateway release to use a
 new omp command.
 
-Session info fields: `gwId`, `cwd`, `approvalMode`, `ompSessionId`,
+**Paths are canonical.** Every session file path the gateway emits (`file` in
+saved entries, `ompSessionFile`, `resumedFrom`) is fully resolved (symlinks
+followed, e.g. `/var/home/...` where `/home` is a symlink), the same form omp
+reports. Compare them as given; no client-side munging. `resumeFrom` accepts
+either form.
+
+**Saved entries** are `{file, mtime, sizeBytes, cwdFolder, cwd, title, running}`.
+`cwd` is the working directory recorded in the transcript (`null` when the file
+has none); prefer it over the mangled `cwdFolder` for display. `running` is true
+when a live session has that file open.
+
+**Resuming.** `POST /sessions {resumeFrom}`:
+
+- With no `cwd`, the session starts in the folder recorded in the transcript. If
+  that folder no longer exists (or none is recorded) it starts in the default
+  `~/projects` and the response carries `"cwdFallback": true`. An explicit `cwd`
+  always wins.
+- If a live session already has that file open, no second process is started:
+  the response is that session's info with HTTP 200 and `"alreadyLive": true`.
+
+Session info fields: `gwId`, `cwd`, `approvalMode`, `resumedFrom`, `ompSessionId`,
 `ompSessionFile`, `ompSessionName`, `model`, `thinkingLevel`, `isStreaming`,
 `idleSec`, `exited`, `protocolVersion`, `messageCount`, `contextUsage`,
 `lastEventSeq`, `pendingUi`.

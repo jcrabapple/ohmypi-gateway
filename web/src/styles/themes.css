@@ -21,7 +21,7 @@
   --err: #f87171;
   --ring: 0 0 0 1px var(--line);
   --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
-  --scrim: rgb(0 0 0 / 0.55);
+  --scrim: rgb(0 0 0 / 0.62);
   --shadow-pop: 0 12px 32px rgb(0 0 0 / 0.45), 0 0 0 1px var(--line-strong);
 }
 

@@ -47,30 +47,32 @@
 </script>
 
 <Section id="theme" title="Theme" hint="Changes apply right away and stay on this device.">
-  <div class="cards" role="radiogroup" aria-label="Theme">
-    {#each THEMES as t (t)}
-      <label class="card">
-        <input
-          type="radio"
-          class="sr-only"
-          name="theme"
-          value={t}
-          checked={settings.data.theme === t}
-          onchange={() => settings.update({ theme: t })}
-        />
-        <span class="preview" data-theme={t} aria-hidden="true">
-          <span class="p-head"><i class="p-dot"></i><i class="p-bar"></i></span>
-          <span class="p-line w70"></span>
-          <span class="p-line w45 dim"></span>
-          <span class="p-pill">Aa</span>
-        </span>
-        <span class="name">
-          {THEME_INFO[t].label}
-          {#if settings.data.theme === t}<Icon name="check" size={14} />{/if}
-        </span>
-        <span class="note">{THEME_INFO[t].note}</span>
-      </label>
-    {/each}
+  <div class="cards-box">
+    <div class="cards" role="radiogroup" aria-label="Theme">
+      {#each THEMES as t (t)}
+        <label class="card">
+          <input
+            type="radio"
+            class="sr-only"
+            name="theme"
+            value={t}
+            checked={settings.data.theme === t}
+            onchange={() => settings.update({ theme: t })}
+          />
+          <span class="preview" data-theme={t} aria-hidden="true">
+            <span class="p-head"><i class="p-dot"></i><i class="p-bar"></i></span>
+            <span class="p-line w70"></span>
+            <span class="p-line w45 dim"></span>
+            <span class="p-pill">Aa</span>
+          </span>
+          <span class="name">
+            {THEME_INFO[t].label}
+            {#if settings.data.theme === t}<Icon name="check" size={14} />{/if}
+          </span>
+          <span class="note">{THEME_INFO[t].note}</span>
+        </label>
+      {/each}
+    </div>
   </div>
 </Section>
 
@@ -144,10 +146,18 @@
 </div>
 
 <style>
+  .cards-box {
+    container-type: inline-size;
+  }
   .cards {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--s-3);
+  }
+  @container (min-width: 480px) {
+    .cards {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
   }
   .card {
     display: grid;

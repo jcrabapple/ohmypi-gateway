@@ -32,6 +32,12 @@ function mountSettings() {
 }
 
 describe('SettingsOverlay', () => {
+  it('puts focus in the search field on open', async () => {
+    const { search } = mountSettings();
+    await settle();
+    expect(document.activeElement).toBe(search);
+  });
+
   it('lists every page and starts on Appearance', () => {
     const { target } = mountSettings();
     const names = [...target.querySelectorAll('nav .item .t')].map((e) => e.textContent);

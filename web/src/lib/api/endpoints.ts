@@ -23,6 +23,12 @@ export interface NewSession {
   resumeFrom?: string;
 }
 
+/** Extra fields on POST /api/sessions: the file was already open, or the saved folder is gone. */
+export interface SessionOpenFlags {
+  alreadyLive?: boolean;
+  cwdFallback?: boolean;
+}
+
 const sid = (id: string) => `/api/sessions/${encodeURIComponent(id)}`;
 const POST = 'POST';
 
@@ -51,9 +57,9 @@ export const host = {
 export const sessions = {
   list: (limit = 60, signal?: AbortSignal) =>
     api<SessionsList>(`/api/sessions?limit=${limit}`, { signal }),
-  create: (body: NewSession) => api<SessionInfo>('/api/sessions', { method: POST, body }),
+  create: (body: NewSession) => api<SessionInfo & SessionOpenFlags>('/api/sessions', { method: POST, body }),
   resume: (saved: Pick<SavedSession, 'file'>) =>
-    api<SessionInfo>('/api/sessions', { method: POST, body: { resumeFrom: saved.file } }),
+    api<SessionInfo & SessionOpenFlags>('/api/sessions', { method: POST, body: { resumeFrom: saved.file } }),
   info: (id: string, signal?: AbortSignal) => api<SessionInfo>(sid(id), { signal }),
   stop: (id: string) => api<unknown>(sid(id), { method: 'DELETE' }),
   messages: (id: string, signal?: AbortSignal) => api<MessagesResponse>(`${sid(id)}/messages`, { signal }),

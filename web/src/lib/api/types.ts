@@ -89,6 +89,8 @@ export interface SavedSession {
   mtime: number;
   sizeBytes: number;
   cwdFolder: string;
+  /** Working directory recorded in the transcript; null for older files. */
+  cwd: string | null;
   title: string;
   running: boolean;
 }

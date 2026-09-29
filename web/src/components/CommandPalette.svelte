@@ -6,7 +6,7 @@
   import { keyLabels, shortcutFor } from '../lib/keymap';
   import { buildPaletteItems, KIND_LABEL, rankItems, type PaletteItem, type PaletteKind } from '../lib/palette/palette';
   import { active, nav, sessionsStore } from '../lib/state';
-  import { Icon, Kbd, Sheet } from '../lib/ui';
+  import { Icon, InlineCode, Kbd, Sheet } from '../lib/ui';
   import type { OverlayProps } from '../lib/overlays';
   import { viewport } from '../lib/ui/media.svelte';
   import StatusGlyph from './StatusGlyph.svelte';
@@ -140,7 +140,7 @@
                 {/if}
               </span>
               <span class="text">
-                <span class="title truncate" class:mono={item.kind === 'slash'}>{item.title}</span>
+                <span class="title truncate" class:mono={item.kind === 'slash'}>{#if item.kind === 'slash'}{item.title}{:else}<InlineCode text={item.title} />{/if}</span>
                 {#if item.sub}<span class="sub truncate">{item.sub}</span>{/if}
               </span>
               {#if item.current}

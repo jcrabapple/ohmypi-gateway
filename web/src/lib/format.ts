@@ -62,6 +62,24 @@ export function contextLevel(percent: number | null | undefined): ContextLevel {
   return 'ok';
 }
 
+export interface TextPart {
+  text: string;
+  code: boolean;
+}
+
+/** Splits `text` on paired backticks so callers can render the spans as code without touching HTML. */
+export function splitInlineCode(text: string): TextPart[] {
+  const parts: TextPart[] = [];
+  let last = 0;
+  for (const m of text.matchAll(/`([^`\n]+)`/g)) {
+    if (m.index > last) parts.push({ text: text.slice(last, m.index), code: false });
+    parts.push({ text: m[1]!, code: true });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last), code: false });
+  return parts;
+}
+
 /**
  * The one title logic for a live session, used by the rail, the header and the palette:
  * its name, else the first prompt (from the saved transcript with the same file), else the folder.
@@ -80,10 +98,15 @@ export function sessionTitle(
 }
 
 /**
- * Saved sessions only know their mangled folder (`-projects-ohmypi-gateway`). When a live session's
- * cwd mangles to the same suffix we can show the real folder name; otherwise the folder as saved.
+ * The gateway reports a saved session's real `cwd` when the transcript has one. Only older transcripts
+ * fall back to the mangled folder (`-projects-ohmypi-gateway`): when a live session's cwd mangles to the
+ * same suffix we show its real folder name, otherwise the folder as saved.
  */
-export function savedFolderLabel(saved: Pick<SavedSession, 'cwdFolder'>, liveCwds: readonly string[]): string {
+export function savedFolderLabel(
+  saved: Pick<SavedSession, 'cwdFolder'> & { cwd?: string | null },
+  liveCwds: readonly string[],
+): string {
+  if (saved.cwd) return basename(saved.cwd) || saved.cwd;
   const folder = saved.cwdFolder;
   for (const cwd of liveCwds) {
     if (folder && cwd.replaceAll('/', '-').endsWith(folder)) return basename(cwd);
@@ -91,7 +114,7 @@ export function savedFolderLabel(saved: Pick<SavedSession, 'cwdFolder'>, liveCwd
   return folder.replace(/^-+/, '') || 'session';
 }
 
-export function savedTitle(saved: Pick<SavedSession, 'title' | 'cwdFolder'>, liveCwds: readonly string[]): string {
+export function savedTitle(saved: Pick<SavedSession, 'title' | 'cwdFolder'> & { cwd?: string | null }, liveCwds: readonly string[]): string {
   return saved.title.trim() || savedFolderLabel(saved, liveCwds);
 }
 

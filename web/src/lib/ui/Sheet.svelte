@@ -142,7 +142,8 @@
     animation: pop-in var(--dur) var(--ease);
   }
   dialog::backdrop {
-    background: var(--scrim);
+    background: var(--scrim, rgb(0 0 0 / 0.6));
+    backdrop-filter: blur(2px);
     animation: fade-in var(--dur) var(--ease);
   }
   .panel {

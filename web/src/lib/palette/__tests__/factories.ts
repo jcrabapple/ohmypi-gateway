@@ -10,7 +10,7 @@ export function session(gwId: string, over: Partial<SessionInfo> = {}): SessionI
 }
 
 export function saved(file: string, title: string, over: Partial<SavedSession> = {}): SavedSession {
-  return { file, mtime: 1_700_000_000, sizeBytes: 1, cwdFolder: '-work-x', title, running: false, ...over };
+  return { file, mtime: 1_700_000_000, sizeBytes: 1, cwdFolder: '-work-x', cwd: null, title, running: false, ...over };
 }
 
 export function command(name: string, description = '', over: Partial<SlashCommand> = {}): SlashCommand {

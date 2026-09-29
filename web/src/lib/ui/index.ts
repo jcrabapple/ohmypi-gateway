@@ -4,6 +4,7 @@ import { ui, type ConfirmRequest } from '../state/ui.svelte';
 export { default as Adaptive } from './Adaptive.svelte';
 export { default as ConfirmDialog } from './ConfirmDialog.svelte';
 export { default as Icon } from './Icon.svelte';
+export { default as InlineCode } from './InlineCode.svelte';
 export { default as Kbd } from './Kbd.svelte';
 export { default as Menu, type MenuItem } from './Menu.svelte';
 export { default as Popover } from './Popover.svelte';

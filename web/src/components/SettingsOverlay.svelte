@@ -24,6 +24,9 @@
   /** Phones show either the list of pages or one page. */
   let showPage = $state(false);
   let content: HTMLDivElement | undefined = $state();
+  let searchInput: HTMLInputElement | undefined = $state();
+  // A deep link focuses its own setting; otherwise the first focus belongs in the search field.
+  const deepLinked = ui.settingsAt !== null;
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
   const hits = $derived(searchSettings(query));
@@ -91,6 +94,7 @@
   }
 
   onMount(() => {
+    if (!deepLinked && !viewport.coarse) void tick().then(() => searchInput?.focus());
     ui.guard('settings', () => {
       if (!configDraft.dirty) return true;
       void confirm({
@@ -127,6 +131,7 @@
           placeholder="Search settings"
           autocomplete="off"
           spellcheck="false"
+          bind:this={searchInput}
           bind:value={query}
           onkeydown={searchKey}
         />
@@ -205,6 +210,7 @@
   .settings {
     display: grid;
     grid-template-columns: 250px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     flex: 1 1 auto;
     min-height: 0;
   }

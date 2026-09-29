@@ -15,7 +15,7 @@ function live(gwId: string, over: Partial<SessionInfo> = {}): SessionInfo {
 }
 
 function saved(file: string, mtime: number, over: Partial<SavedSession> = {}): SavedSession {
-  return { file, mtime, sizeBytes: 1, cwdFolder: 'f', title: file, running: false, ...over };
+  return { file, mtime, sizeBytes: 1, cwdFolder: 'f', cwd: null, title: file, running: false, ...over };
 }
 
 describe('groupSessions', () => {
