@@ -17,12 +17,34 @@ endpoint that describes the server:
 
 ```
 GET /.well-known/ompgw.json
-{"name":"ohmypi-gateway","version":"0.2.0","apiBase":"/api",
+{"name":"ohmypi-gateway","version":"0.3.0","apiBase":"/api",
  "websocket":"/omp-ws/{sessionId}","auth":{...},"openapi":"/api/openapi.json"}
 ```
 
 `GET /healthz` is also public and returns `{"ok":true}`; use it for reachability
-checks. Nothing else is reachable without credentials.
+checks. The web client files (below) are public too. Nothing else is reachable
+without credentials.
+
+## Web client files (public)
+
+| Path | Serves |
+|---|---|
+| `/` | `web/dist/index.html` (`Cache-Control: no-cache`) when that file exists; otherwise the classic dashboard |
+| `/classic` | the classic Alpine dashboard (`static/index.html`), always. `/static/*` is its assets |
+| `/assets/*` | `web/dist/assets/*`, hashed filenames, `Cache-Control: public, max-age=31536000, immutable` |
+| `/<name>` | a file sitting directly in `web/dist` (`sw.js`, `manifest.webmanifest`, `favicon.svg`, `icon-*.png`, ...). `sw.js` and the manifest are `no-cache`; other root files `public, max-age=3600`. `index.html` is not served at `/index.html`. Subdirectories, dotfiles and symlinks that leave `web/dist` are never served |
+
+`/manifest.webmanifest` falls back to a small generated JSON manifest when
+`web/dist/manifest.webmanifest` doesn't exist. Point the gateway at a build
+elsewhere with `OMPGW_WEB_DIST` (default `<repo>/web/dist`); it is checked per
+request, so a fresh build is picked up without a restart. Unknown paths outside
+the API get 401 without credentials and 404 with them.
+
+**CSP.** Every response carries `script-src 'self'` (no `unsafe-eval`), plus
+`style-src 'self' 'unsafe-inline'`, `img-src 'self' data: blob:`,
+`connect-src 'self'`, `worker-src 'self'`, `manifest-src 'self'`. Only
+`/classic` and `/static/*` (Alpine) add `'unsafe-eval'`, and so does `/` while
+there is no web build.
 
 ## Auth
 
@@ -61,7 +83,8 @@ All under `/api`, JSON in/out, errors as `{"error": "..."}`.
 | GET | `/system` | omp version/path, host, gateway limits |
 | GET | `/config` | `{raw, parsed, path}` of `~/.omp/agent/config.yml` |
 | PUT | `/config` | body = full YAML (`Content-Type: text/yaml`). Validated by omp; auto-reverted if omp rejects it |
-| GET | `/models?q=` | `omp models` catalog |
+| GET | `/models?q=` | `omp models` catalog as text (`{raw}`) |
+| GET | `/catalog/models?refresh=` | `{"models": [...]}`, exactly what `omp models --json` emits (`provider`, `id`, `selector`, `name`, `contextWindow`, `maxTokens`, `reasoning`, `thinking` (`string[]` or `null`), `input`, `cost`). Cached in memory for 10 minutes; `refresh=1` bypasses the cache. First call can take up to about a minute. Use this, not the session's `/models` |
 | GET | `/skills` | installed skills with metadata |
 | GET | `/plugins` | installed plugins |
 | GET | `/agents` | subagent definitions |
@@ -79,7 +102,7 @@ session is a transcript on disk that can be resumed.
 | POST | `/sessions` | start: `{cwd?, model?, thinking?, approvalMode?, resumeFrom?}`. `approvalMode` is `yolo` (default) \| `write` \| `always-ask`. `resumeFrom` must be a file under `~/.omp/agent/sessions` |
 | GET | `/sessions/{id}` | session info (below) |
 | DELETE | `/sessions/{id}` | stop the child; transcript stays on disk |
-| POST | `/sessions/{id}/prompt` | `{message, mode?, wait?, timeout?}`. `mode`: `prompt` \| `steer` (inject into the running turn) \| `follow_up` (queue for after it). Returns immediately with the ack; follow progress on the WebSocket. `wait:true` blocks until the turn ends and adds `lastAssistantText` (see note) |
+| POST | `/sessions/{id}/prompt` | `{message, images?, mode?, wait?, timeout?}`. `images` is up to 4 of `{"type":"image","data":"<base64>","mimeType":"image/png"|"image/jpeg"|"image/webp"|"image/gif"}` (max 5 MB decoded each; raw base64 only, no `data:` prefix) and is forwarded to omp on every mode. Bad type, mime, base64 or size is 422. `message` may be empty when images are present. `mode`: `prompt` \| `steer` (inject into the running turn) \| `follow_up` (queue for after it). Returns immediately with the ack; follow progress on the WebSocket. `wait:true` blocks until the turn ends and adds `lastAssistantText` (see note) |
 | POST | `/sessions/{id}/abort` | stop the current turn |
 | POST | `/sessions/{id}/compact` | `{instructions?}` |
 | GET | `/sessions/{id}/state` | omp state, minus the system prompt and tool dumps |
@@ -88,9 +111,9 @@ session is a transcript on disk that can be resumed.
 | POST | `/sessions/{id}/model` | `{model}` |
 | POST | `/sessions/{id}/thinking` | `{level}`: off, minimal, low, medium, high, xhigh, max |
 | POST | `/sessions/{id}/name` | `{name}` |
-| GET | `/sessions/{id}/models` | models available to this session |
+| GET | `/sessions/{id}/models` | models available to this session (RPC `get_available_models`; takes minutes, prefer `/catalog/models`) |
 | GET | `/sessions/{id}/commands` | slash commands available |
-| GET | `/sessions/{id}/events?after=` | event backlog since a cursor (polling fallback) |
+| GET | `/sessions/{id}/events?after=` | `{events, lastSeq, gap}`: event backlog since a cursor (polling fallback). `gap` is true when `after > 0` and events after it were dropped from the backlog; refetch state and messages instead of trusting the delta |
 | GET | `/sessions/{id}/ui` | dialogs omp is blocked on (see Approvals) |
 | POST | `/sessions/{id}/ui/{requestId}` | answer one |
 | POST | `/sessions/{id}/rpc` | escape hatch: `{type, ...}` = any omp RpcCommand, returned as `{data}` |
@@ -98,9 +121,7 @@ session is a transcript on disk that can be resumed.
 **`wait:true` through the tunnel:** Cloudflare aborts any response that hasn't
 started within 100 seconds, so remote clients must use the default
 (`wait:false`) plus the WebSocket for anything but short turns. `wait` is for
-scripts on the host and quick one-liners. Images aren't a first-class field
-yet; send them with the `rpc` passthrough (`{"type":"prompt","message":...,"images":[...]}`).
-
+scripts on the host and quick one-liners.
 The `rpc` passthrough means a client never waits on a gateway release to use a
 new omp command.
 
@@ -119,7 +140,8 @@ One socket per open session. Every server frame is:
 
 - `seq > 0`: an omp event, numbered per session, strictly increasing. Persist
   the highest one you have processed.
-- `seq == 0`: a gateway control frame: `auth_ok` (carries session info),
+- `seq == 0`: a gateway control frame: `auth_ok` (carries session info and
+  `gap`, see below),
   `heartbeat` (every 25s idle), `pong`, `rpc_response`, `ws_error`.
 
 **Auth**, first match wins: bearer header on the upgrade (native clients); the
@@ -135,6 +157,11 @@ sequence for a transcript view:
 1. `GET /sessions/{id}` → note `lastEventSeq`
 2. `GET /sessions/{id}/messages` → render history
 3. open the socket with `?after=<lastEventSeq>`
+
+`auth_ok.gap` is `true` when `after > 0` and the backlog no longer reaches back
+to `after + 1`: events were dropped, so the replay has a hole. Refetch state and
+messages instead of trusting the delta. It is `false` for `after=0`, since a
+fresh client loads history over REST anyway.
 
 On reconnect, reuse your latest cursor. Mobile clients should close the socket
 when backgrounded and reconnect with the cursor on resume; nothing is lost
@@ -193,3 +220,6 @@ Other `extension_ui_request` methods (`notify`, `setStatus`, `setWidget`,
 - Sessions idle longer than `OMPGW_IDLE_REAP_SEC` (default 6h) are stopped.
   Their transcripts stay resumable.
 - Set these in `gateway.env` next to the service (gitignored).
+- `OMPGW_WEB_DIST`: directory of the built web client (default `web/dist` in the
+  repo).
+- Prompt images: 4 per prompt, 5 MB decoded each.

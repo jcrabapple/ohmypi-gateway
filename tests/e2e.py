@@ -6,6 +6,7 @@ resume, and the config round trip. Leaves no sessions running.
 """
 import asyncio
 import json
+import os
 import sys
 import threading
 import urllib.error
@@ -69,6 +70,45 @@ code, _, hdrs = req("GET", "/", token=None)
 csp = hdrs.get("Content-Security-Policy", "")
 check("dashboard-served+csp", code == 200 and "frame-ancestors 'none'" in csp and "'unsafe-inline' 'unsafe-eval'" not in csp)
 
+
+def script_src(policy: str) -> str:
+    return next((d.strip() for d in policy.split(";") if d.strip().startswith("script-src")), "")
+
+
+dist_dir = Path(os.environ.get("OMPGW_WEB_DIST") or Path(__file__).resolve().parent.parent / "web" / "dist")
+dist_active = (dist_dir / "index.html").is_file()   # only meaningful when the gateway runs on this host
+code, _, hdrs = req("GET", "/classic", token=None)
+check("classic-served", code == 200 and hdrs.get("Cache-Control") == "no-cache")
+check("csp-classic-keeps-eval", "'unsafe-eval'" in script_src(hdrs.get("Content-Security-Policy", "")))
+for extra in ("worker-src 'self'", "manifest-src 'self'", "img-src 'self' data: blob:"):
+    check(f"csp-has-{extra.split()[0]}", extra in csp, extra)
+if dist_active:
+    check("csp-app-no-eval", script_src(csp) == "script-src 'self'", script_src(csp))
+else:
+    check("csp-root-is-classic-without-dist", "'unsafe-eval'" in script_src(csp), "(no web/dist: / is the old dashboard)")
+
+# Traversal must never reach a file outside the build, whether or not it is authenticated.
+for probe in ("/assets/../auth-token", "/..%2fauth-token", "/%2e%2e/auth-token", "/assets/%2e%2e/auth-token",
+              "/assets/..%2f..%2fauth-token", "/static/../auth-token", "/does-not-exist.js"):
+    for tok in (None, TOKEN):
+        code, _, hdrs = req("GET", probe, token=tok)
+        leaked = code == 200 and "text/html" not in (hdrs.get("Content-Type") or "")
+        check(f"traversal-{probe}-{'auth' if tok else 'anon'}", code in (401, 404) and not leaked, f"-> {code}")
+code, _, hdrs = req("GET", "/assets/nope-abc123.js", token=None)
+check("missing-asset-404", code == 404)
+if dist_active:
+    code, _, hdrs = req("GET", "/", token=None)
+    check("app-index-no-cache", code == 200 and hdrs.get("Cache-Control") == "no-cache")
+    assets = sorted((dist_dir / "assets").glob("*")) if (dist_dir / "assets").is_dir() else []
+    if assets:
+        code, _, hdrs = req("GET", "/assets/" + assets[0].name, token=None)
+        check("asset-immutable", code == 200 and "immutable" in (hdrs.get("Cache-Control") or ""), assets[0].name)
+    if (dist_dir / "sw.js").is_file():
+        code, _, hdrs = req("GET", "/sw.js", token=None)
+        check("sw-no-cache", code == 200 and hdrs.get("Cache-Control") == "no-cache")
+    code, _, _ = req("GET", "/index.html", token=None)
+    check("index-html-not-a-root-file", code in (401, 404))
+
 # ------------------------------------------------------------------- auth
 
 code, _, _ = req("GET", "/api/health", token=None)
@@ -115,6 +155,18 @@ code, _, _ = req("PUT", "/api/config", raw=b"- just\n- a list\n", headers={"Cont
 check("config-rejects-non-mapping", code == 400)
 check("config-unchanged", ok("GET", "/api/config")["raw"] == cfg["raw"])
 
+code, data, _ = req("GET", "/api/catalog/models", timeout=180)
+models = data.get("models") if isinstance(data, dict) else None
+check("catalog-models", code == 200 and isinstance(models, list) and len(models) > 0, f"{len(models or [])} models")
+if models:
+    check("catalog-model-shape", all(k in models[0] for k in ("provider", "id", "contextWindow")))
+code, data2, _ = req("GET", "/api/catalog/models")
+check("catalog-models-cached", code == 200 and data2 == data)
+code, data3, _ = req("GET", "/api/catalog/models?refresh=1", timeout=180)
+check("catalog-models-refresh", code == 200 and isinstance(data3.get("models"), list) and len(data3["models"]) > 0)
+code, _, _ = req("GET", "/api/catalog/models", token=None)
+check("catalog-models-needs-auth", code == 401)
+
 # ----------------------------------------------------------------- sessions
 
 code, _, _ = req("POST", "/api/sessions", {"resumeFrom": "/etc/passwd"})
@@ -135,6 +187,31 @@ try:
     st = ok("GET", f"/api/sessions/{gid}/state")
     check("state-trimmed", "model" in st and "systemPrompt" not in st and "dumpTools" not in st)
     check("messages", len(ok("GET", f"/api/sessions/{gid}/messages")["messages"]) >= 2)
+    png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    pp = f"/api/sessions/{gid}/prompt"
+    bad = {
+        "bad-mime": [{"type": "image", "data": png, "mimeType": "image/svg+xml"}],
+        "bad-base64": [{"type": "image", "data": "not*base64!", "mimeType": "image/png"}],
+        "data-url": [{"type": "image", "data": "data:image/png;base64," + png, "mimeType": "image/png"}],
+        "bad-type": [{"type": "text", "data": png, "mimeType": "image/png"}],
+        "too-many": [{"type": "image", "data": png, "mimeType": "image/png"}] * 5,
+        "too-big": [{"type": "image", "data": "A" * (7 * 1024 * 1024), "mimeType": "image/png"}],
+        "not-a-list": "nope",
+    }
+    for name, imgs in bad.items():
+        code, _, _ = req("POST", pp, {"message": "x", "images": imgs})
+        check(f"images-{name}-422", code == 422, f"-> {code}")
+    code, _, _ = req("POST", pp, {"message": "", "images": []})
+    check("empty-message-still-422", code == 422)
+    # Valid images are accepted by validation and forwarded; a text-only model may
+    # refuse at the omp layer (400), which is not a gateway validation failure.
+    code, _, _ = req("POST", pp, {"message": "Reply with exactly: ok", "images": [
+        {"type": "image", "data": png, "mimeType": "image/png"}], "wait": True, "timeout": 90}, timeout=100)
+    check("images-valid-passes-validation", code in (200, 400), f"-> {code}")
+    ev = ok("GET", f"/api/sessions/{gid}/events?after=0")
+    check("events-gap-false-after-0", ev["gap"] is False)
+    check("events-gap-false-at-cursor", ok("GET", f"/api/sessions/{gid}/events?after={ev['lastSeq']}")["gap"] is False)
+    check("events-gap-after-future-cursor", ok("GET", f"/api/sessions/{gid}/events?after={ev['lastSeq'] + 50}")["gap"] is False)
     check("session-stats", ok("GET", f"/api/sessions/{gid}/stats")["data"] is not None)
     check("set-thinking", ok("POST", f"/api/sessions/{gid}/thinking", {"level": "low"}) is not None)
     ok("POST", f"/api/sessions/{gid}/name", {"name": "e2e probe"})
@@ -149,6 +226,7 @@ try:
                                       max_size=None, open_timeout=20) as ws:
             first = json.loads(await asyncio.wait_for(ws.recv(), 20))
             assert first["event"]["type"] == "auth_ok", first
+            assert first["event"].get("gap") is False, first
             threading.Thread(target=lambda: req("POST", f"/api/sessions/{gid}/prompt",
                                                 {"message": "Reply with exactly: beep", "mode": "prompt"}),
                              daemon=True).start()

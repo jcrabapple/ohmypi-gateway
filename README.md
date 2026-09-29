@@ -33,7 +33,11 @@ The service binds `127.0.0.1:9315` only. Remote access goes through a
 Cloudflare tunnel (`cloudflared` ingress → `http://127.0.0.1:9315`); there is
 no LAN listener to port-forward by mistake. Tunables go in `gateway.env`
 (gitignored): `OMPGW_MAX_SESSIONS`, `OMPGW_IDLE_REAP_SEC`,
-`OMPGW_EXTRA_ORIGINS`, `OMPGW_DEFAULT_APPROVAL`.
+`OMPGW_EXTRA_ORIGINS`, `OMPGW_DEFAULT_APPROVAL`, `OMPGW_WEB_DIST`.
+
+`OMPGW_WEB_DIST` is the directory of the built web client (default `web/dist`).
+When it contains `index.html`, `/` serves it and the Alpine dashboard moves to
+`/classic`; otherwise `/` stays the Alpine dashboard. See `docs/API.md`.
 
 ## Security model
 

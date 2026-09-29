@@ -7,6 +7,8 @@ model and docs/API.md for the client contract.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import os
@@ -41,9 +43,11 @@ from .bridge import (
     scan_saved_sessions,
 )
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PROJECT_DIR / "static"
+# Built web client. Served when WEB_DIST/index.html exists, else the Alpine dashboard.
+WEB_DIST = Path(os.environ.get("OMPGW_WEB_DIST") or PROJECT_DIR / "web" / "dist").expanduser().resolve()
 CONFIG_FILE = OMP_AGENT_DIR / "config.yml"
 STARTED_AT = time.time()
 
@@ -74,22 +78,61 @@ app.add_middleware(
     max_age=600,
 )
 
-PUBLIC_PATHS = {"/", "/healthz", "/auth/login", "/auth/logout", "/.well-known/ompgw.json",
-                "/manifest.webmanifest"}
+PUBLIC_PATHS = {"/", "/classic", "/healthz", "/auth/login", "/auth/logout",
+                "/.well-known/ompgw.json", "/manifest.webmanifest"}
 UNSAFE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "X-Frame-Options": "DENY",
-    # Alpine's standard build compiles expressions with Function(), hence
-    # unsafe-eval. No inline scripts: app logic lives in /static/app.js.
-    "Content-Security-Policy": (
-        "default-src 'self'; script-src 'self' 'unsafe-eval'; "
-        "style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; "
-        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
-    ),
 }
+
+
+def web_dist_ready() -> bool:
+    return (WEB_DIST / "index.html").is_file()
+
+
+def csp_for(path: str) -> str:
+    # Alpine's standard build compiles expressions with Function(), hence
+    # unsafe-eval for the classic dashboard only. The Svelte app needs none.
+    # Without a web build, "/" is the Alpine dashboard too.
+    classic = path == "/classic" or path.startswith("/static/") or (path == "/" and not web_dist_ready())
+    script = "script-src 'self' 'unsafe-eval'" if classic else "script-src 'self'"
+    return (
+        f"default-src 'self'; {script}; "
+        "style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; "
+        "worker-src 'self'; manifest-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    )
+
+
+def dist_root_file(name: str) -> Path | None:
+    """A regular file sitting directly in WEB_DIST (never index.html, never a
+    path, never a symlink that leaves the directory)."""
+    if not name or name == "index.html" or name.startswith(".") or "/" in name or "\\" in name:
+        return None
+    try:
+        p = (WEB_DIST / name).resolve()
+        return p if p.is_file() and p.parent == WEB_DIST else None
+    except (OSError, ValueError):
+        return None
+
+
+def dist_asset(rel: str) -> Path | None:
+    base = WEB_DIST / "assets"
+    try:
+        base = base.resolve()
+        p = (base / rel).resolve()
+        return p if p.is_file() and base in p.parents else None
+    except (OSError, ValueError):
+        return None
+
+
+def is_public(path: str) -> bool:
+    if path in PUBLIC_PATHS or path.startswith(("/static/", "/assets/")):
+        return True
+    return path.count("/") == 1 and dist_root_file(path[1:]) is not None
 
 
 def _peer(request_or_ws) -> str | None:
@@ -109,8 +152,7 @@ def authenticate(headers, cookies, peer: str | None) -> str | None:
 async def gate(request: Request, call_next):
     path = request.url.path
     ip = client_ip(request.headers, _peer(request))
-    needs_auth = not (path in PUBLIC_PATHS or path.startswith("/static/")) \
-        and request.method != "OPTIONS"
+    needs_auth = not is_public(path) and request.method != "OPTIONS"
 
     if needs_auth:
         wait = limiter.locked(ip)
@@ -134,7 +176,8 @@ async def gate(request: Request, call_next):
     response = await call_next(request)
     for k, v in SECURITY_HEADERS.items():
         response.headers.setdefault(k, v)
-    if path == "/" or path.startswith("/static/"):
+    response.headers.setdefault("Content-Security-Policy", csp_for(path))
+    if path in ("/", "/classic") or path.startswith("/static/"):
         response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
@@ -320,6 +363,30 @@ async def models(q: str | None = None):
     return {"raw": (await acli(*args, timeout=90))[-40000:]}
 
 
+_MODELS_TTL_SEC = 600
+_models_cache: tuple[float, dict] | None = None
+_models_lock = asyncio.Lock()
+
+
+@app.get("/api/catalog/models")
+async def catalog_models(refresh: int = 0):
+    """`omp models --json`, cached for 10 minutes. The RPC get_available_models
+    takes minutes, so clients should use this instead."""
+    global _models_cache
+    async with _models_lock:
+        now = time.monotonic()
+        if refresh or _models_cache is None or now - _models_cache[0] > _MODELS_TTL_SEC:
+            out = await acli("models", "--json", timeout=180)
+            try:
+                data = json.loads(out)
+            except json.JSONDecodeError:
+                raise HTTPException(502, "omp models --json returned invalid JSON")
+            if not isinstance(data, dict):
+                data = {"models": data}
+            _models_cache = (now, data)
+        return _models_cache[1]
+
+
 @app.get("/api/skills")
 async def skills():
     skills_dir = OMP_AGENT_DIR / "skills"
@@ -375,6 +442,41 @@ async def stats():
 
 # ------------------------------------------------------------------- sessions
 
+MAX_IMAGES = 4
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+IMAGE_MIME_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
+
+
+def parse_images(raw) -> list[dict]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise HTTPException(422, "images must be a list")
+    if len(raw) > MAX_IMAGES:
+        raise HTTPException(422, f"at most {MAX_IMAGES} images")
+    out = []
+    for i, img in enumerate(raw):
+        if not isinstance(img, dict) or img.get("type") != "image":
+            raise HTTPException(422, f"images[{i}] must be an object with type \"image\"")
+        if img.get("mimeType") not in IMAGE_MIME_TYPES:
+            raise HTTPException(422, f"images[{i}].mimeType must be one of {', '.join(IMAGE_MIME_TYPES)}")
+        data = img.get("data")
+        if not isinstance(data, str) or not data:
+            raise HTTPException(422, f"images[{i}].data must be a base64 string")
+        # Cheap bound before decoding: base64 is 4 chars per 3 bytes.
+        if len(data) > (MAX_IMAGE_BYTES // 3 + 1) * 4:
+            raise HTTPException(422, f"images[{i}] is larger than {MAX_IMAGE_BYTES // (1024 * 1024)} MB")
+        try:
+            decoded = base64.b64decode(data, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(422, f"images[{i}].data is not valid base64")
+        if not decoded:
+            raise HTTPException(422, f"images[{i}].data is empty")
+        if len(decoded) > MAX_IMAGE_BYTES:
+            raise HTTPException(422, f"images[{i}] is larger than {MAX_IMAGE_BYTES // (1024 * 1024)} MB")
+        out.append({"type": "image", "data": data, "mimeType": img["mimeType"]})
+    return out
+
 @app.get("/api/sessions")
 async def list_sessions(include_saved: bool = True, limit: int = 100):
     await get_manager().reap_dead()
@@ -429,7 +531,8 @@ async def prompt(gw_id: str, request: Request):
     sess = get_session_or_404(gw_id)
     body = await json_body(request)
     message = body.get("message")
-    if not isinstance(message, str) or not message.strip():
+    images = parse_images(body.get("images"))
+    if not isinstance(message, str) or not (message.strip() or images):
         raise HTTPException(422, "message required")
     mode = body.get("mode") or ("steer" if body.get("steer") else "prompt")
     if mode not in ("prompt", "steer", "follow_up"):
@@ -437,10 +540,11 @@ async def prompt(gw_id: str, request: Request):
     wait = bool(body.get("wait"))
     sess.touch()
     if mode == "follow_up":
-        data = await sess.command("follow_up", message=message, timeout=30)
+        data = await sess.command("follow_up", message=message, timeout=30,
+                                  **({"images": images} if images else {}))
     else:
         data = await sess.prompt(message, wait=wait, steer=(mode == "steer"),
-                                 timeout=float(body.get("timeout", 600)))
+                                 timeout=float(body.get("timeout", 600)), images=images)
     out = sess.info()
     out["ack"] = data
     if wait:
@@ -559,7 +663,7 @@ async def ui_answer(gw_id: str, request_id: str, request: Request):
 async def events(gw_id: str, after: int = 0):
     sess = get_session_or_404(gw_id)
     return {"events": [{"seq": s, "event": e} for s, e in sess.backlog_since(after)],
-            "lastSeq": sess.last_seq}
+            "lastSeq": sess.last_seq, "gap": sess.has_gap(after)}
 
 
 # ----------------------------------------------------------------- websocket
@@ -617,8 +721,10 @@ async def ws_session(ws: WebSocket, gw_id: str, after: int = 0):
 
     async def pump_out() -> None:
         nonlocal last_sent
-        await send({"seq": 0, "event": {"type": "auth_ok", "session": sess.info()}})
-        for seq, event in sess.backlog_since(last_sent):
+        gap = sess.has_gap(last_sent)
+        replay = sess.backlog_since(last_sent)
+        await send({"seq": 0, "event": {"type": "auth_ok", "session": sess.info(), "gap": gap}})
+        for seq, event in replay:
             await send({"seq": seq, "event": event})
             last_sent = seq
         while True:
@@ -715,18 +821,52 @@ async def _shutdown() -> None:
 
 # ------------------------------------------------------------------- static
 
+NO_CACHE = {"Cache-Control": "no-cache"}
+IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+
 @app.get("/")
 async def index():
+    if web_dist_ready():
+        return FileResponse(WEB_DIST / "index.html", headers=NO_CACHE)
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/classic")
+async def classic():
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/assets/{rel:path}")
+async def web_asset(rel: str):
+    p = dist_asset(rel)
+    if p is None:
+        raise HTTPException(404, "not found")
+    return FileResponse(p, headers=IMMUTABLE)
 
 
 @app.get("/manifest.webmanifest")
 async def manifest():
+    p = dist_root_file("manifest.webmanifest")
+    if p is not None:
+        return FileResponse(p, media_type="application/manifest+json", headers=NO_CACHE)
     return JSONResponse({
         "name": "ohmypi", "short_name": "omp", "start_url": "/", "display": "standalone",
         "background_color": "#0d1117", "theme_color": "#0d1117",
         "icons": [{"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml"}],
     }, media_type="application/manifest+json")
+
+
+@app.get("/{name}")
+async def web_root_file(name: str):
+    """Root-level files of the web build (sw.js, icons, favicon). Must stay the
+    last route so it never shadows an API path."""
+    p = dist_root_file(name)
+    if p is None:
+        raise HTTPException(404, "not found")
+    if name == "sw.js":
+        return FileResponse(p, media_type="text/javascript", headers=NO_CACHE)
+    return FileResponse(p, headers={"Cache-Control": "public, max-age=3600"})
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

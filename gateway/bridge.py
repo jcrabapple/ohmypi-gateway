@@ -353,10 +353,11 @@ class OmpSession:
     # ------------------------------------------------------------- high level
 
     async def prompt(self, message: str, wait: bool = False, steer: bool = False,
-                     timeout: float = 600.0) -> dict:
+                     timeout: float = 600.0, images: list[dict] | None = None) -> dict:
         """Send a prompt. wait=True resolves when the agent turn ends."""
         cmd = "steer" if steer else "prompt"
-        data = await self.command(cmd, message=message, timeout=30)
+        extra = {"images": images} if images else {}
+        data = await self.command(cmd, message=message, timeout=30, **extra)
         if wait:
             loop = asyncio.get_running_loop()
             waiter = loop.create_future()
@@ -422,6 +423,10 @@ class OmpSession:
 
     def backlog_since(self, seq: int) -> list[tuple[int, dict]]:
         return [item for item in self.backlog if item[0] > seq]
+
+    def has_gap(self, after: int) -> bool:
+        """True when events after `after` were dropped from the backlog."""
+        return after > 0 and bool(self.backlog) and self.backlog[0][0] > after + 1
 
     # ------------------------------------------------------------------- stop
 
