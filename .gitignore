@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 auth-token
 gateway.env
+
+# local dev artifacts (raw captures contain local paths)
+dev/
+web/node_modules/
+web/dist/

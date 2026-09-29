@@ -1,6 +1,6 @@
 """Async bridge to the oh-my-pi (omp) RPC protocol.
 
-Speaks newline-delimited JSON over stdio with `omp --mode rpc --no-ui`.
+Speaks newline-delimited JSON over stdio with `omp --mode rpc`.
 Handles: request correlation by id, protocol v2 negotiation with rpc_chunk
 reassembly, event fan-out to subscribers, and a replay backlog for late
 subscribers.
@@ -37,6 +37,8 @@ if DEFAULT_APPROVAL_MODE not in APPROVAL_MODES:
 # extension_ui_request methods that block omp until answered. The rest
 # (notify, setStatus, setWidget, setTitle, set_editor_text) are fire-and-forget.
 UI_DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
+
+STDOUT_LINE_LIMIT = 64 * 1024 * 1024  # bytes per stdout line from omp
 
 class RpcError(Exception):
     """A command failed at the omp layer (success: false)."""
@@ -141,6 +143,10 @@ class OmpSession:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=stderr_fh,
+            # omp writes one JSON object per line and some (the model catalog,
+            # big tool results) exceed asyncio's 64 KiB default; overrunning it
+            # crashes the reader and the session looks dead.
+            limit=STDOUT_LINE_LIMIT,
         )
         self._reader_task = asyncio.create_task(self._reader(), name=f"omp-reader-{self.gw_id}")
         try:
