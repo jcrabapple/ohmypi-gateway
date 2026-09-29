@@ -1,8 +1,9 @@
 // Overlays, toasts and the confirm dialog. Overlays are a stack so Escape closes
 // the top one, and each remembers the element that opened it so focus can return.
 
-export type OverlayId =
-  | 'drawer' | 'palette' | 'new-session' | 'settings' | 'inspector' | 'shortcuts' | 'session-info';
+import type { SettingsTarget } from '../palette/settings-index';
+
+export type OverlayId = 'drawer' | 'palette' | 'new-session' | 'settings' | 'inspector' | 'session-info';
 
 export interface Toast {
   id: number;
@@ -32,7 +33,12 @@ class UiStore {
   railCollapsed = $state(false);
   /** The item the inspector overlay should show. Set by `inspect`. */
   inspecting = $state.raw<unknown>(null);
+  /** Where the settings overlay should land when it opens or is re-aimed. */
+  settingsAt = $state.raw<SettingsTarget | null>(null);
+  /** Bumped to ask the session header to start renaming. */
+  renameTick = $state(0);
 
+  private guards = new Map<OverlayId, () => boolean>();
   private nextToast = 1;
   private timers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -57,6 +63,21 @@ class UiStore {
     if (opener?.isConnected) queueMicrotask(() => opener.focus());
   }
 
+  /** An overlay with unsaved work registers a guard. It returns true to let the close go ahead. */
+  guard(id: OverlayId, fn: (() => boolean) | null): void {
+    if (fn) this.guards.set(id, fn);
+    else this.guards.delete(id);
+  }
+
+  /** Close through the overlay's guard, if it has one. Returns false when the guard held it open. */
+  tryClose(id?: OverlayId): boolean {
+    const entry = id ? this.overlays.find((o) => o.id === id) : this.overlays.at(-1);
+    if (!entry) return true;
+    if (this.guards.get(entry.id)?.() === false) return false;
+    this.close(entry.id);
+    return true;
+  }
+
   /** Show an item's raw source in the inspector overlay. */
   inspect(raw: unknown): void {
     this.inspecting = raw;
@@ -70,7 +91,7 @@ class UiStore {
       return true;
     }
     if (this.overlays.length) {
-      this.close();
+      this.tryClose();
       return true;
     }
     return false;

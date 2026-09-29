@@ -51,6 +51,7 @@ Dev only:
 | `svelte-check` | Type checks `.svelte` files. This is `bun run check`. |
 | `vitest` | Test runner, shares vite's config. |
 | `happy-dom` | Default DOM for tests. Used instead of jsdom because vitest's jsdom environment crashes under bun ("addEventListener called on an object that is not a valid EventTarget"). |
+| `fake-indexeddb` | In-memory IndexedDB for tests. happy-dom has no `indexedDB`, and the stale-while-revalidate cache (sessions list, per-session messages) is only worth testing against a real IndexedDB API: the tests check that cached data paints first and that the network result then replaces it. Test-only, 6.2.5, no runtime cost. |
 | `jsdom` + `@types/jsdom` | Only for `render/__tests__/markdown.test.ts`. happy-dom cannot run DOMPurify (its node removal is incomplete, so `<script>` and `<iframe>` survive), so the XSS tests build a jsdom window and hand it to DOMPurify. Constructing `JSDOM` directly works under bun. |
 
 ## Layout
@@ -74,7 +75,12 @@ src/
     state/              rune stores: auth, sessions (+ grouping), active, nav (hash routes), models, settings, ui
     ui/                 Sheet (native dialog), Popover, Adaptive, Menu, ConfirmDialog, Toasts,
                         Icon, Spinner, Kbd, longpress action, swipe, viewport media flags
-    overlays.ts         registry for Task D overlays (palette, settings, session-info, inspector)
+    overlays.ts         registry for overlays (palette, settings, session-info, inspector), openSettings(target)
+    keymap.ts           SHORTCUTS table (single source of truth), createKeyMap dispatcher, key labels
+    actions.svelte.ts   app-level commands used by shortcuts, palette and menus
+    palette/            fuzzy scoring, palette items + ranking, settings search index, rail order helpers
+    pwa/                service worker registration (production only)
+    color.ts            hex parsing, WCAG contrast, readable ink for a custom accent
     format.ts           basename, time, money, context level, saved-session labels
   components/
     Shell.svelte        rail + main, drawer on narrow screens, edge swipe, keyboard shortcuts, title badge
@@ -90,6 +96,8 @@ src/
         Composer        textarea, SlashMenu, ImageTray, ComposerChips (ModelPicker), send controls
       Home.svelte       no session selected
     Overlays.svelte     NewSessionSheet, registered overlays, ConfirmDialog, Toasts
+    register.ts         registers the four Task D overlays
+    CommandPalette, SettingsOverlay (+ settings/ pages), SessionInfoSheet, InspectorSheet
     Login.svelte
 scripts/derive-fixtures.py   builds the trimmed test fixtures from dev/fixtures
 scripts/live-check.ts        end-to-end check through the dev proxy (see above)
@@ -130,5 +138,34 @@ names redacted and long strings trimmed. Regenerate with
   composer is read-only because the gateway sets the mode at start.
 - The composer stays mounted (hidden and inert) while an approval is showing so the draft survives.
 - Slash menu: Enter or click sends a command that takes no argument; Tab always inserts `/name `.
-- Overlays for Task D register with `registerOverlay(id, Component)`; until then their entry points
-  toast "Not available yet".
+- Overlays register with `registerOverlay(id, Component)` (see `components/register.ts`).
+
+## Task D: power layer and PWA
+
+- **Keyboard.** `lib/keymap.ts` holds one `SHORTCUTS` table. `createKeyMap` dispatches the global
+  entries (Shell wires it to `runShortcut` in `actions.svelte.ts`), the Shortcuts settings page and the
+  palette hints read the same table. While a text control has focus only Escape and Ctrl/Cmd chords
+  fire, so Alt+Up/Down and `/`, `[`, `g n` do not work inside the message box. That is deliberate.
+- **Palette.** `lib/palette/palette.ts` builds items and ranks them (pure, tested). `>` narrows to
+  actions and settings, `/` to the open session's slash commands. Settings pages are palette items;
+  jumping to one setting is done by the search box inside Settings (`settings-index.ts`).
+- **Settings.** The Agent config page edits a shared draft (`state/config-draft.svelte.ts`) so it
+  survives page switches. Closing settings with unsaved edits goes through `ui.guard` / `ui.tryClose`
+  and asks first. Saving is `PUT /api/config` as `text/yaml`; the gateway's validation message is
+  shown as is. Tests mock the endpoint and never send a real PUT.
+- **Accent.** A custom accent also sets `--accent-ink` from its luminance so button text stays
+  readable; the picker warns when the accent is low contrast on the canvas.
+- **Offline cache.** `sessionsStore.paintCached` and `active.paintCache` read IndexedDB
+  (`platform/idb.ts`) first and then reconcile with the network. Skeletons show only when there is no
+  cache. Failed IndexedDB access is ignored (private windows).
+- **Service worker.** `public/sw.js` uses `importScripts('/sw-routing.js')`. The routing function
+  (`navigate` / `asset` / `bypass`) lives in that plain script so the tests evaluate the exact file
+  that ships. Navigations are network-first with the cached `/` as the fallback, `/assets/*` is
+  cache-first, and `/api`, `/auth`, `/omp-ws`, `/healthz` are never touched. The cache name carries a
+  build hash stamped into `dist/sw.js` by a small plugin in `vite.config.ts`; activation deletes every
+  other cache. Registration happens only in production builds over a secure context.
+- **Static files.** The gateway serves only root-level files from `dist`, so the manifest, icons,
+  `sw.js` and `sw-routing.js` sit at the root of `public/`.
+- **Icons.** `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` and `apple-touch-icon.png` were
+  generated once from `static/icon.svg` with ImageMagick (`magick`) and are committed. They are not
+  rebuilt by `bun run build`. The maskable icon keeps the glyph inside the safe zone.

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { registerComposer } from '../lib/composer/bridge';
   import { active } from '../lib/state';
   import ApprovalPanel from './ApprovalPanel.svelte';
   import Composer from './Composer.svelte';
@@ -8,6 +9,11 @@
   let { gwId }: { gwId: string } = $props();
 
   let composer: ReturnType<typeof Composer> | undefined = $state();
+
+  $effect(() => {
+    registerComposer(composer ?? null);
+    return () => registerComposer(null);
+  });
 
   const request = $derived(active.pendingUi[0] ?? null);
 </script>

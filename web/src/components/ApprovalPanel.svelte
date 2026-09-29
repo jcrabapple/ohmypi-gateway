@@ -144,7 +144,9 @@
   {/if}
 
   <div class="foot">
-    <button type="button" class="dismiss" disabled={busy} onclick={() => answer({ cancelled: true })}>Dismiss</button>
+    <button type="button" class="dismiss" disabled={busy} onclick={() => answer({ cancelled: true })}>
+      Dismiss (cancel this request)
+    </button>
   </div>
 </div>
 
@@ -216,9 +218,10 @@
     min-height: 48px;
     padding: var(--s-2) var(--s-4);
     border-radius: var(--r-md);
+    border: 1px solid var(--line-strong);
     text-align: left;
-    background: var(--inset);
-    box-shadow: var(--ring);
+    background: var(--surface);
+    color: var(--ink);
     transition: background var(--dur-fast) var(--ease);
   }
   .choice:hover:not(:disabled) {
@@ -226,8 +229,8 @@
   }
   .choice.approve {
     background: var(--accent);
+    border-color: transparent;
     color: var(--accent-ink);
-    box-shadow: none;
     font-weight: 600;
   }
   .choice.approve:hover:not(:disabled) {
@@ -245,13 +248,20 @@
   .desc {
     font-size: var(--fs-sm);
     font-weight: 400;
-    opacity: 0.75;
     overflow-wrap: anywhere;
   }
   .key {
     flex: none;
-    font: 500 var(--fs-xs) var(--mono);
-    opacity: 0.6;
+    min-width: 20px;
+    padding: 0 5px;
+    text-align: center;
+    border: 1px solid currentColor;
+    border-radius: var(--r-sm);
+    font: 500 var(--fs-xs) / 18px var(--mono);
+  }
+  .deny .key,
+  .neutral .key {
+    color: var(--ink-2);
   }
   @media (pointer: coarse) {
     .key {
@@ -277,7 +287,7 @@
   .dismiss {
     min-height: var(--hit);
     padding: 0 var(--s-4);
-    color: var(--ink-3);
+    color: var(--ink-2);
     font-size: var(--fs-sm);
     text-decoration: underline;
     text-underline-offset: 3px;

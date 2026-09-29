@@ -1,3 +1,4 @@
+import { isHex, readableInk } from '../color';
 import { device } from '../platform/storage';
 
 export type Theme = 'terminal' | 'graphite' | 'paper' | 'contrast';
@@ -44,6 +45,14 @@ export function sanitizeSettings(raw: unknown): SettingsData {
   };
 }
 
+/** Keep the browser chrome (address bar, PWA title bar) the same colour as the page. */
+function syncThemeColor(root: HTMLElement): void {
+  const meta = root.ownerDocument.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) return;
+  const canvas = root.ownerDocument.defaultView?.getComputedStyle(root).getPropertyValue('--canvas').trim();
+  if (canvas && isHex(canvas)) meta.content = canvas;
+}
+
 class SettingsStore {
   data = $state<SettingsData>(sanitizeSettings(device.get<unknown>(KEY, null)));
   systemLight = $state(false);
@@ -73,8 +82,15 @@ class SettingsStore {
     root.dataset.density = this.data.density;
     root.dataset.width = this.data.width;
     root.dataset.prose = this.data.proseFont;
-    if (this.data.accent) root.style.setProperty('--accent', this.data.accent);
-    else root.style.removeProperty('--accent');
+    const accent = this.data.accent;
+    if (accent) {
+      root.style.setProperty('--accent', accent);
+      root.style.setProperty('--accent-ink', readableInk(accent));
+    } else {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--accent-ink');
+    }
+    syncThemeColor(root);
   }
 
   /** Track the OS color scheme. Returns a stop function. */

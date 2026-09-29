@@ -7,6 +7,7 @@ export { default as Icon } from './Icon.svelte';
 export { default as Kbd } from './Kbd.svelte';
 export { default as Menu, type MenuItem } from './Menu.svelte';
 export { default as Popover } from './Popover.svelte';
+export { default as Segmented } from './Segmented.svelte';
 export { default as Sheet } from './Sheet.svelte';
 export { default as Spinner } from './Spinner.svelte';
 export { default as Toasts } from './Toasts.svelte';

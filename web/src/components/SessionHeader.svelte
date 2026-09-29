@@ -1,14 +1,16 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
+  import { busy, compactSession, stopActiveSession } from '../lib/actions.svelte';
   import { openOverlay } from '../lib/overlays';
   import { basename, money, sessionTitle } from '../lib/format';
-  import { active, nav, ui } from '../lib/state';
-  import { confirm, Icon, Menu, toast, type MenuItem } from '../lib/ui';
+  import { active, sessionsStore, ui } from '../lib/state';
+  import { Icon, Menu, type MenuItem } from '../lib/ui';
   import { viewport } from '../lib/ui/media.svelte';
   import ContextMeter from './ContextMeter.svelte';
 
   const info = $derived(active.info);
-  const title = $derived(info ? sessionTitle(info) : '');
+  const title = $derived(info ? sessionTitle(info, sessionsStore.saved) : '');
+  const folder = $derived(info ? basename(info.cwd) : '');
   const usage = $derived(active.stats?.contextUsage ?? info?.contextUsage ?? null);
   const model = $derived(info?.model?.name ?? info?.model?.id ?? '');
 
@@ -54,6 +56,14 @@
     input?.select();
   }
 
+  let seenRename = ui.renameTick;
+  $effect(() => {
+    const t = ui.renameTick;
+    if (t === seenRename) return;
+    seenRename = t;
+    if (info && !editing) void startRename();
+  });
+
   async function finishRename(save: boolean) {
     if (!editing) return;
     editing = false;
@@ -83,37 +93,10 @@
   // ---- overflow menu
   let menuOpen = $state(false);
   let menuBtn: HTMLButtonElement | undefined = $state();
-  let compacting = $state(false);
-
-  async function compact() {
-    if (compacting) return;
-    compacting = true;
-    toast('Compacting context');
-    try {
-      await active.compact();
-      toast('Context compacted');
-    } catch (e) {
-      ui.error(e instanceof Error ? e.message : 'Could not compact the session');
-    } finally {
-      compacting = false;
-    }
-  }
-
-  async function stopSession() {
-    if (!active.gwId) return;
-    const ok = await confirm({
-      title: 'Stop this session',
-      body: 'The transcript stays in History. You can resume it later.',
-      confirmLabel: 'Stop session',
-      danger: true,
-    });
-    if (ok && active.gwId) await nav.stop(active.gwId);
-  }
-
   const items = $derived<MenuItem[]>([
     { id: 'info', label: 'Session info', icon: 'info', onselect: () => openOverlay('session-info') },
-    { id: 'compact', label: 'Compact', icon: 'compress', disabled: compacting || active.running, onselect: compact },
-    { id: 'stop', label: 'Stop session', icon: 'power', danger: true, onselect: stopSession },
+    { id: 'compact', label: 'Compact', icon: 'compress', disabled: busy.compacting || active.running, onselect: compactSession },
+    { id: 'stop', label: 'Stop session', icon: 'power', danger: true, onselect: stopActiveSession },
   ]);
 
   function leading(e: MouseEvent) {
@@ -160,7 +143,9 @@
       <span class="conn" role="status">{connectionText}</span>
     {/if}
     {#if info}
-      <span class="cwd mono truncate" title={info.cwd}>{basename(info.cwd)}</span>
+      {#if folder && folder !== title}
+        <span class="cwd mono truncate" title={info.cwd}>{folder}</span>
+      {/if}
       {#if model}<span class="chip model truncate" title={info.model?.id}>{model}</span>{/if}
       <ContextMeter percent={usage?.percent ?? null} tokens={usage?.tokens} window={usage?.contextWindow} />
       {#if active.stats}
@@ -197,12 +182,14 @@
   }
   .titles {
     min-width: 0;
-    flex: 0 1 auto;
+    flex: 1 1 auto;
+    display: flex;
   }
   .title {
     display: inline-flex;
     align-items: center;
     gap: var(--s-2);
+    min-width: 0;
     max-width: 100%;
     min-height: var(--hit);
     padding: 0 var(--s-2);
@@ -248,7 +235,7 @@
     display: flex;
     align-items: center;
     gap: var(--s-3);
-    flex: 1;
+    flex: 0 0 auto;
     justify-content: flex-end;
     min-width: 0;
     color: var(--ink-3);

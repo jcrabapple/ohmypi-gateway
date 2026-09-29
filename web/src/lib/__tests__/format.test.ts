@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { basename, contextLevel, money, savedFolderLabel, uniqueCwds } from '../format';
+import { basename, contextLevel, money, savedFolderLabel, sessionTitle, uniqueCwds, uptime } from '../format';
 
 describe('contextLevel', () => {
   it('is ok below 70, warn from 70, err from 85', () => {
@@ -33,5 +33,33 @@ describe('format helpers', () => {
   });
   it('uniqueCwds keeps first-seen order', () => {
     expect(uniqueCwds([{ cwd: '/a' }, { cwd: '/b' }, { cwd: '/a' }])).toEqual(['/a', '/b']);
+  });
+});
+
+describe('sessionTitle', () => {
+  const info = { ompSessionName: null, ompSessionFile: '/s/a.jsonl', cwd: '/work/proj' };
+  const saved = [{ file: '/s/a.jsonl', title: ' Fix the login bug ' }, { file: '/s/b.jsonl', title: 'Other' }];
+
+  it('prefers the session name', () => {
+    expect(sessionTitle({ ...info, ompSessionName: ' Named ' }, saved)).toBe('Named');
+  });
+
+  it('falls back to the first prompt of the same transcript file', () => {
+    expect(sessionTitle(info, saved)).toBe('Fix the login bug');
+  });
+
+  it('falls back to the folder, then to a generic label', () => {
+    expect(sessionTitle(info, [])).toBe('proj');
+    expect(sessionTitle({ ...info, ompSessionFile: null }, saved)).toBe('proj');
+    expect(sessionTitle({ ...info, cwd: '' }, [])).toBe('Session');
+  });
+});
+
+describe('uptime', () => {
+  it('reads as the two largest units', () => {
+    expect(uptime(5)).toBe('5s');
+    expect(uptime(12 * 60)).toBe('12m');
+    expect(uptime(3 * 3600 + 5 * 60)).toBe('3h 5m');
+    expect(uptime(2 * 86400 + 4 * 3600)).toBe('2d 4h');
   });
 });

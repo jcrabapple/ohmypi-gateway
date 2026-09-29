@@ -112,13 +112,16 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    min-width: 0;
+    width: max-content;
+  }
+  .chips .chip {
+    flex: none;
   }
   .lab {
     text-transform: none;
   }
   .chips .chip:first-child {
-    max-width: 200px;
+    max-width: min(200px, 42vw);
   }
   .modes {
     display: grid;

@@ -99,10 +99,22 @@ describe('ApprovalPanel', () => {
     expect(answer).toHaveBeenCalledWith('r1', { value: 'edited' });
   });
 
-  it('Dismiss cancels', async () => {
+  it('Deny is a real button of the same kind as Approve, not a link', () => {
+    const { target } = render(ApprovalPanel, { request: req({}) });
+    const allow = buttonNamed(target, /^Allow/)!;
+    const deny = buttonNamed(target, /^Deny/)!;
+    expect(deny.classList.contains('choice')).toBe(true);
+    expect(deny.classList.contains('deny')).toBe(true);
+    expect(allow.classList.contains('choice')).toBe(true);
+    expect(deny.querySelector('.key')?.textContent).toBe('2');
+  });
+
+  it('Dismiss says what it does and cancels', async () => {
     const { answer } = spyAnswer();
     const { target } = render(ApprovalPanel, { request: req({}) });
-    buttonNamed(target, 'Dismiss')!.click();
+    const dismiss = buttonNamed(target, 'Dismiss (cancel this request)')!;
+    expect(dismiss.tagName).toBe('BUTTON');
+    dismiss.click();
     await settle();
     expect(answer).toHaveBeenCalledWith('r1', { cancelled: true });
   });

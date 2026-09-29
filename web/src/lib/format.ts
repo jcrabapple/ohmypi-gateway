@@ -62,8 +62,21 @@ export function contextLevel(percent: number | null | undefined): ContextLevel {
   return 'ok';
 }
 
-export function sessionTitle(s: Pick<SessionInfo, 'ompSessionName' | 'cwd'>): string {
-  return s.ompSessionName?.trim() || basename(s.cwd) || 'Session';
+/**
+ * The one title logic for a live session, used by the rail, the header and the palette:
+ * its name, else the first prompt (from the saved transcript with the same file), else the folder.
+ */
+export function sessionTitle(
+  s: Pick<SessionInfo, 'ompSessionName' | 'ompSessionFile' | 'cwd'>,
+  saved: readonly Pick<SavedSession, 'file' | 'title'>[] = [],
+): string {
+  const name = s.ompSessionName?.trim();
+  if (name) return name;
+  if (s.ompSessionFile) {
+    const first = saved.find((x) => x.file === s.ompSessionFile)?.title.trim();
+    if (first) return first;
+  }
+  return basename(s.cwd) || 'Session';
 }
 
 /**
@@ -89,4 +102,16 @@ export function firstLine(text: string | undefined): string {
 /** Unique nonempty values, most recent first, for cwd suggestions. */
 export function uniqueCwds(live: readonly Pick<SessionInfo, 'cwd'>[]): string[] {
   return [...new Set(live.map((s) => s.cwd).filter(Boolean))];
+}
+
+/** "12m", "3h 5m", "2d 4h" for how long something has been up. */
+export function uptime(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return '';
+  const m = Math.floor(sec / 60);
+  if (m < 1) return `${Math.floor(sec)}s`;
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  return h % 24 ? `${d}d ${h % 24}h` : `${d}d`;
 }

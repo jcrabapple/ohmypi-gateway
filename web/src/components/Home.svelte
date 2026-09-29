@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keyLabels } from '../lib/keymap';
   import { ui } from '../lib/state';
   import { Icon, Kbd } from '../lib/ui';
   import { viewport } from '../lib/ui/media.svelte';
@@ -21,7 +22,10 @@
       <Icon name="plus" size={16} /> New session
     </button>
     {#if !viewport.coarse}
-      <p class="hint"><Kbd>Ctrl</Kbd> <Kbd>Shift</Kbd> <Kbd>O</Kbd></p>
+      <p class="hint">
+        <span class="keys">{#each keyLabels('mod+shift+o') as k (k)}<Kbd>{k}</Kbd>{/each}</span> new session
+        <span class="keys">{#each keyLabels('mod+k') as k (k)}<Kbd>{k}</Kbd>{/each}</span> search
+      </p>
     {/if}
   </div>
 </div>
@@ -51,6 +55,15 @@
     color: var(--ink-2);
   }
   .hint {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: var(--s-2) var(--s-4);
     font-size: var(--fs-sm);
+  }
+  .keys {
+    display: inline-flex;
+    gap: var(--s-1);
   }
 </style>

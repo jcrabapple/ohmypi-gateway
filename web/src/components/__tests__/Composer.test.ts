@@ -113,3 +113,16 @@ describe('Composer send modes', () => {
     expect(again.target.querySelector('textarea')!.value).toBe('draft for a');
   });
 });
+
+describe('Composer bar layout', () => {
+  it('keeps the send controls out of the scrolling chips row', () => {
+    const { target } = render(Composer, { gwId: 'g1' });
+    const bar = target.querySelector('.bar')!;
+    const scroller = bar.querySelector('.chips-scroll')!;
+    const right = bar.querySelector('.right')!;
+    expect(scroller.contains(right)).toBe(false);
+    expect(right.contains(buttonNamed(target, 'Send')!)).toBe(true);
+    expect(scroller.contains(buttonNamed(target, 'Send')!)).toBe(false);
+    expect(bar.children).toHaveLength(4);
+  });
+});

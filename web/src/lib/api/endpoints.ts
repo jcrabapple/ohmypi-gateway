@@ -39,7 +39,7 @@ export const host = {
   system: () => api<SystemInfo>('/api/system'),
   catalogModels: (refresh = false) =>
     api<CatalogModels>(`/api/catalog/models${refresh ? '?refresh=1' : ''}`, { timeoutMs: 180_000 }),
-  config: () => api<{ raw: string; parsed: unknown; file?: string; path?: string }>('/api/config'),
+  config: () => api<{ raw: string; parsed: unknown; file?: string; path?: string; parseError?: string }>('/api/config'),
   saveConfig: (yaml: string) =>
     api<{ ok?: boolean; note?: string }>('/api/config', {
       method: 'PUT', body: yaml, headers: { 'Content-Type': 'text/yaml' }, timeoutMs: 120_000,

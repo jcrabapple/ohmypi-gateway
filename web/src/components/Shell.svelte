@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { runShortcut } from '../lib/actions.svelte';
+  import { createKeyMap } from '../lib/keymap';
   import { canNotify, permission, requestPermission } from '../lib/platform/notify';
   import { device } from '../lib/platform/storage';
   import { active, nav, sessionsStore, ui } from '../lib/state';
@@ -78,15 +80,13 @@
     drawer?.querySelector<HTMLElement>('button')?.focus({ preventScroll: true });
   });
 
+  const keys = createKeyMap({
+    run: runShortcut,
+    modalOpen: () => !!ui.confirmRequest || ui.overlays.some((o) => o.id !== 'drawer'),
+  });
+
   function onkey(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      if (ui.escape()) e.preventDefault();
-      return;
-    }
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
-      e.preventDefault();
-      ui.open('new-session');
-    }
+    keys.handle(e);
   }
 </script>
 

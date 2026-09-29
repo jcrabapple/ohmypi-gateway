@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { openOverlay } from '../lib/overlays';
+  import { shortcutText } from '../lib/keymap';
+  import { openOverlay, openSettings } from '../lib/overlays';
   import { basename, relativeTime, savedFolderLabel, savedTitle, sessionTitle, uniqueCwds } from '../lib/format';
   import { active, auth, nav, sessionsStore, ui } from '../lib/state';
   import { confirm, Icon, Kbd } from '../lib/ui';
@@ -27,8 +28,6 @@
     { key: 'idle', label: 'Idle', status: 'idle' },
   ];
 
-  const isMac = typeof navigator !== 'undefined' && /mac|iphone|ipad/i.test(navigator.platform);
-
   function liveSub(s: SessionInfo): string {
     const model = s.model?.name ?? s.model?.id;
     return [basename(s.cwd), model].filter(Boolean).join(' · ');
@@ -55,14 +54,14 @@
   <header>
     <span class="brand"><Icon name="mark" size={22} /><span>omp</span></span>
     <span class="spacer"></span>
-    <button type="button" class="icon-btn" aria-label="Search" title="Search" onclick={() => openOverlay('palette')}>
+    <button type="button" class="icon-btn" aria-label="Search" title="Search ({shortcutText('palette')})" onclick={() => openOverlay('palette')}>
       <Icon name="search" />
     </button>
     <button
       type="button"
       class="icon-btn new"
       aria-label="New session"
-      title={isMac ? 'New session (⌘⇧O)' : 'New session (Ctrl+Shift+O)'}
+      title="New session ({shortcutText('new-session')})"
       onclick={openNew}
     >
       <Icon name="plus" />
@@ -80,7 +79,7 @@
       <div class="empty">
         <p>No sessions yet</p>
         <button type="button" class="btn btn-primary" onclick={openNew}>
-          <Icon name="plus" size={16} /> New session <Kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</Kbd>
+          <Icon name="plus" size={16} /> New session <Kbd>{shortcutText('new-session')}</Kbd>
         </button>
       </div>
     {:else}
@@ -91,7 +90,7 @@
             <h2 id="rail-{g.key}" class="eyebrow"><span>{g.label}</span><span class="count">{list.length}</span></h2>
             {#each list as s (s.gwId)}
               <RailRow
-                title={sessionTitle(s)}
+                title={sessionTitle(s, sessionsStore.saved)}
                 sub={liveSub(s)}
                 status={g.status}
                 active={nav.gwId === s.gwId}
@@ -126,7 +125,7 @@
   <footer>
     <ConnectionDot state={connection()} />
     <span class="spacer"></span>
-    <button type="button" class="icon-btn" aria-label="Settings" title="Settings" onclick={() => openOverlay('settings')}>
+    <button type="button" class="icon-btn" aria-label="Settings" title="Settings ({shortcutText('settings')})" onclick={() => openSettings()}>
       <Icon name="sliders" />
     </button>
     <button type="button" class="icon-btn" aria-label="Sign out" title="Sign out" onclick={signOut}>

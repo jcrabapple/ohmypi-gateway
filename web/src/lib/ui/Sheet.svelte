@@ -12,14 +12,25 @@
     title?: string;
     /** Accessible name when there is no visible title. */
     label?: string;
-    size?: 'sm' | 'md' | 'lg';
+    size?: 'sm' | 'md' | 'lg' | 'xl';
+    /** The body lays itself out (no padding, no scroll), e.g. a search field over a list. */
+    flush?: boolean;
+    /** Below 900 px the sheet fills the screen height instead of sizing to its content. */
+    fillNarrow?: boolean;
+    /** On wide screens the dialog keeps one height instead of growing and shrinking. */
+    fixedHeight?: boolean;
+    /** Wide screens: `top` sits in the upper third, like a palette. */
+    place?: 'center' | 'top';
     /** Hide the header (the body supplies its own, e.g. a search field). */
     bare?: boolean;
     children: Snippet;
     footer?: Snippet;
   };
 
-  let { open, onclose, title, label, size = 'md', bare = false, children, footer }: Props = $props();
+  let {
+    open, onclose, title, label, size = 'md', bare = false, flush = false, fillNarrow = false,
+    fixedHeight = false, place = 'center', children, footer,
+  }: Props = $props();
 
   let dlg: HTMLDialogElement | undefined = $state();
   let dragY = $state(0);
@@ -67,6 +78,9 @@
 <dialog
   bind:this={dlg}
   class="sheet {size}"
+  class:fill={fillNarrow}
+  class:fixed={fixedHeight}
+  class:top={place === 'top'}
   aria-labelledby={title && !bare ? `${uid}-t` : undefined}
   aria-label={title && !bare ? undefined : label}
   oncancel={cancel}
@@ -98,7 +112,7 @@
           <span class="handle" aria-hidden="true"></span>
         </div>
       {/if}
-      <div class="body scroll-y">{@render children()}</div>
+      <div class="body scroll-y" class:flush>{@render children()}</div>
       {#if footer}<div class="foot">{@render footer()}</div>{/if}
     </div>
   {/if}
@@ -120,6 +134,9 @@
   dialog.sm { --w: 400px; }
   dialog.md { --w: 560px; }
   dialog.lg { --w: 720px; }
+  dialog.xl { --w: 900px; }
+  dialog.fixed { height: min(660px, calc(100dvh - 64px)); }
+  dialog.top { margin-top: min(12vh, 110px); }
   dialog[open] {
     display: flex;
     animation: pop-in var(--dur) var(--ease);
@@ -164,6 +181,12 @@
     min-height: 0;
     flex: 1 1 auto;
   }
+  .body.flush {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+  }
   .foot {
     flex: none;
     display: flex;
@@ -181,6 +204,15 @@
       border-radius: var(--r-lg) var(--r-lg) 0 0;
       max-height: calc(100dvh - var(--kb) - var(--safe-t) - var(--s-4));
     }
+    dialog.top {
+      margin-top: auto;
+    }
+    dialog.fixed:not(.fill) {
+      height: auto;
+    }
+    dialog.fill {
+      height: calc(100dvh - var(--kb) - var(--safe-t) - var(--s-4));
+    }
     dialog[open] {
       animation: slide-up var(--dur-slow) var(--ease);
     }
@@ -197,6 +229,9 @@
     }
     .body {
       padding: var(--s-3) var(--s-4) var(--s-4);
+    }
+    .body.flush {
+      padding: 0;
     }
     .foot {
       padding: var(--s-3) var(--s-4) calc(var(--s-3) + var(--safe-b));

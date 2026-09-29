@@ -70,3 +70,32 @@ export function longpress(node: HTMLElement, opts: LongPressOptions) {
     },
   };
 }
+
+export type FadeEdge = '' | 'start' | 'end' | 'both';
+
+/** Which edges of a horizontal scroller still have content hidden past them. */
+export function fadeEdges(scrollLeft: number, clientWidth: number, scrollWidth: number): FadeEdge {
+  const start = scrollLeft > 1;
+  const end = scrollLeft + clientWidth < scrollWidth - 1;
+  return start && end ? 'both' : start ? 'start' : end ? 'end' : '';
+}
+
+/** Sets `data-fade` on a horizontally scrolling row so CSS can mask the edges that hide content. */
+export function scrollFade(node: HTMLElement) {
+  const update = () => {
+    const edge = fadeEdges(Math.abs(node.scrollLeft), node.clientWidth, node.scrollWidth);
+    if (edge) node.dataset.fade = edge;
+    else delete node.dataset.fade;
+  };
+  update();
+  node.addEventListener('scroll', update, { passive: true });
+  const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+  ro?.observe(node);
+  if (node.firstElementChild) ro?.observe(node.firstElementChild);
+  return {
+    destroy() {
+      node.removeEventListener('scroll', update);
+      ro?.disconnect();
+    },
+  };
+}

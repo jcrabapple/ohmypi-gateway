@@ -7,6 +7,7 @@
   import { filterCommands, flattenGroups, slashQuery, slashText, wantsInput, type SlashMatch } from '../lib/composer/slash';
   import { active, ui } from '../lib/state';
   import { Icon, Kbd } from '../lib/ui';
+  import { scrollFade } from '../lib/ui/actions';
   import { viewport } from '../lib/ui/media.svelte';
   import ComposerChips from './ComposerChips.svelte';
   import ImageTray, { type Attached } from './ImageTray.svelte';
@@ -240,20 +241,18 @@
     ></textarea>
 
     <div class="bar">
-      <div class="left">
-        <input bind:this={fileInput} type="file" accept={IMAGE_ACCEPT} multiple hidden onchange={onattach} />
-        <button
-          type="button"
-          class="icon-btn attach"
-          aria-label="Attach images"
-          title="Attach images"
-          disabled={ended}
-          onclick={() => fileInput?.click()}
-        >
-          <Icon name="paperclip" size={17} />
-        </button>
-        <div class="chips-scroll"><ComposerChips /></div>
-      </div>
+      <input bind:this={fileInput} type="file" accept={IMAGE_ACCEPT} multiple hidden onchange={onattach} />
+      <button
+        type="button"
+        class="icon-btn attach"
+        aria-label="Attach images"
+        title="Attach images"
+        disabled={ended}
+        onclick={() => fileInput?.click()}
+      >
+        <Icon name="paperclip" size={17} />
+      </button>
+      <div class="chips-scroll" use:scrollFade><ComposerChips /></div>
 
       <div class="right">
         {#if active.queued > 0}
@@ -343,19 +342,13 @@
       font-size: var(--fs-base);
     }
   }
+  /* Three slots that never overlap: attach, the scrolling chips row, and the send controls. */
   .bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--s-2);
-    padding: var(--s-1) var(--s-2) var(--s-2);
-  }
-  .left {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--s-1);
-    min-width: 0;
-    flex: 1;
+    padding: var(--s-1) var(--s-2) var(--s-2);
   }
   .chips-scroll {
     min-width: 0;
@@ -366,6 +359,15 @@
   .chips-scroll::-webkit-scrollbar {
     display: none;
   }
+  .chips-scroll:global([data-fade='end']) {
+    mask-image: linear-gradient(to right, var(--ink) calc(100% - 28px), transparent);
+  }
+  .chips-scroll:global([data-fade='start']) {
+    mask-image: linear-gradient(to left, var(--ink) calc(100% - 28px), transparent);
+  }
+  .chips-scroll:global([data-fade='both']) {
+    mask-image: linear-gradient(to right, transparent, var(--ink) 28px, var(--ink) calc(100% - 28px), transparent);
+  }
   .attach {
     flex: none;
     min-width: max(30px, var(--hit));
@@ -375,7 +377,7 @@
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    flex: none;
+    padding-left: var(--s-1);
   }
   .queued {
     color: var(--ink-3);
