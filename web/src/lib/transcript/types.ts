@@ -1,5 +1,6 @@
 import type { OmpEvent, OmpMessage, UiRequest, UnknownEvent, Usage } from '../api/types';
 import type { PromptImage, PromptMode } from '../api/endpoints';
+import type { FileChange } from '../render/diff2';
 
 interface ItemBase {
   /** Stable across history and live for keyed items; use as the `{#each}` key. */
@@ -68,6 +69,8 @@ export interface ToolItem extends ItemBase {
   output: string;
   status: ToolStatus;
   details?: unknown;
+  /** Files this tool changed (edit results, write synthesis); empty/absent for other tools. */
+  files?: FileChange[];
   startedAt?: number;
   endedAt?: number;
 }

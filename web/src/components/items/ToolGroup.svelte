@@ -56,12 +56,19 @@
         </span>
         <span class="name mono">{t.toolName}</span>
         <span class="summary truncate" class:mono={!t.intent}>{t.summary}</span>
+        {#if t.files?.length && t.status !== 'error'}
+          {@const adds = t.files.reduce((n, f) => n + f.adds, 0)}
+          {@const dels = t.files.reduce((n, f) => n + f.dels, 0)}
+          <span class="stat mono" aria-label="{adds} added, {dels} removed"
+            ><span class="adds">+{adds}</span> <span class="dels">-{dels}</span></span
+          >
+        {/if}
         <span class="dur mono">{took(t)}</span>
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14} class="chev" />
       </button>
       {#if open}
         <div class="detail" id="{uid}-{t.id}">
-          <ToolOutput text={t.output} error={t.status === 'error'} />
+          <ToolOutput text={t.output} error={t.status === 'error'} files={t.files} />
           <div class="acts">
             <button type="button" class="btn btn-ghost btn-sm" disabled={!t.output} onclick={() => copyOut(t)}>Copy output</button>
             <button type="button" class="btn btn-ghost btn-sm" disabled={t.raw === undefined} onclick={() => ui.inspect(t.raw)}>
@@ -123,6 +130,18 @@
   .summary {
     flex: 1;
     color: var(--ink-2);
+  }
+  .stat {
+    flex: none;
+    display: inline-flex;
+    gap: var(--s-1);
+    font-size: var(--fs-xs);
+  }
+  .stat .adds {
+    color: var(--ansi-2);
+  }
+  .stat .dels {
+    color: var(--ansi-1);
   }
   .dur {
     flex: none;

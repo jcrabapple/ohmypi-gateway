@@ -68,8 +68,10 @@ src/
     components.css      .btn, .icon-btn, .field, .eyebrow, streaming caret, diff lines
   lib/
     api/                fetch wrapper, typed endpoints, wire types, SessionStream (WebSocket)
-    transcript/         pure reducer, Item types, blocks.ts (fold tool runs, progress check)
-    render/             markdown -> DOMPurify, highlight.js core, ansi, diff, escape
+    transcript/         pure reducer, Item types, blocks.ts (fold tool runs, progress check),
+                        changes.ts (per-session file-change roll-up)
+    render/             markdown -> DOMPurify, highlight.js core, ansi, diff, escape,
+                        diff2 (omp diff parser + per-file extraction), wordmarks
     composer/           slash filtering, send plan, images, drafts, modes, approval answers
     platform/           storage, idb, keyboard (--kb), haptics, notify, clipboard
     state/              rune stores: auth, sessions (+ grouping), active, nav (hash routes), models, settings, ui
@@ -87,10 +89,12 @@ src/
       Rail.svelte       header, Needs you / Running / Idle, history by day, footer
         RailRow, StatusGlyph, ConnectionDot
       SessionView.svelte
-        SessionHeader   inline rename, cwd, model chip, ContextMeter, cost, connection text, overflow menu
+        SessionHeader   inline rename, cwd, model chip, ContextMeter, cost, connection text, overflow menu,
+                        "N files changed" button when the session touched files
         Transcript      auto-follow, jump pill, skeleton / error / gone / empty states
-          items/        UserBubble, AssistantMessage, ThinkingRow, ToolGroup (+ToolOutput), SkillChip,
-                        CommandCard, NoticeLine, MessageActions
+        ChangesView     per-session Changes page (route `#/s/<id>/changes`), one DiffBlock per file
+          items/        UserBubble, AssistantMessage, ThinkingRow, ToolGroup (+ToolOutput), DiffBlock,
+                        SkillChip, CommandCard, NoticeLine, MessageActions
           EmptySession  three starters
         ApprovalPanel   takes over the dock for select / confirm / input / editor
         Composer        textarea, SlashMenu, ImageTray, ComposerChips (ModelPicker), send controls
@@ -139,6 +143,23 @@ names redacted and long strings trimmed. Regenerate with
 - The composer stays mounted (hidden and inert) while an approval is showing so the draft survives.
 - Slash menu: Enter or click sends a command that takes no argument; Tab always inserts `/name `.
 - Overlays register with `registerOverlay(id, Component)` (see `components/register.ts`).
+
+## Phase 2 A: diff view and Changes page
+
+- `edit` tool results carry omp's line-numbered diff (`lib/render/diff2.ts` parses it; the older
+  `diff.ts` heuristic for arbitrary tool output is untouched). Multi-file patches come from
+  `details.perFileResults`. `write` results carry no diff, so the reducer synthesizes an
+  all-additions diff from the call's `{path, content}`, capped at 60 KB per file. Virtual URIs
+  (`xd://`, any `scheme://`) are not file changes and are filtered.
+- The reducer stores the computed files on the tool item (`ToolItem.files`), so history replay and
+  live events produce identical output; the equivalence tests cover this against
+  `transcript/__fixtures__/edits.json`.
+- `DiffBlock` renders one file: op badge (A/W/M/D), short path with full title, +/− counts,
+  Unified|Split toggle (split by default above 1000 px of container width; created files are
+  unified only), word-level marks, syntax highlighting from the file extension, gap rows, 400-line
+  cap with "Show all", `content-visibility` per row group.
+- `ChangesView` (route `#/s/<id>/changes`, reachable from the header button and the palette's
+  "Session changes" action) rolls up every file, latest diff per path, one global mode toggle.
 
 ## Task D: power layer and PWA
 

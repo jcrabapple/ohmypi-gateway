@@ -5,11 +5,13 @@ import type { Item, ToolItem, TranscriptInput, TranscriptState } from '../types'
 import historyFixture from '../__fixtures__/messages.json';
 import turnFixture from '../__fixtures__/turn-tools-markdown.json';
 import slashFixture from '../__fixtures__/slash.json';
+import editsFixture from '../__fixtures__/edits.json';
 
 type Frame = { seq: number; event: unknown };
 const history = historyFixture as unknown as MessagesResponse;
 const turn = turnFixture as unknown as Frame[];
 const slash = (slashFixture as unknown as { events: Frame[] }).events;
+const edits = editsFixture as unknown as { messages: MessagesResponse['messages']; events: Frame[] };
 
 const ev = (event: unknown, at?: number): TranscriptInput => ({
   kind: 'event',
@@ -377,5 +379,113 @@ describe('helpers', () => {
     expect(b.calls).toHaveLength(1);
     expect(splitContent('s').text).toBe('s');
     expect(splitContent(undefined).text).toBe('');
+  });
+});
+
+describe('file changes', () => {
+  it('extracts per-file diffs from an edit result', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'tool_execution_start', toolCallId: 'e1', toolName: 'edit', args: { path: 'a.py' } }));
+    s = reduce(s, ev({
+      type: 'tool_execution_end', toolCallId: 'e1', toolName: 'edit',
+      result: { content: [{ type: 'text', text: 'ok' }], details: { diff: ' 1|a\n-2|b\n+2|c\n 3|d', op: 'update', path: 'a.py' } },
+    }));
+    const t = s.items[0] as ToolItem;
+    expect(t.files).toEqual([
+      { path: 'a.py', op: 'update', diff: ' 1|a\n-2|b\n+2|c\n 3|d', adds: 1, dels: 1, created: false },
+    ]);
+  });
+
+  it('synthesizes the write diff from call arguments', () => {
+    let s = reduce(emptyTranscript(), ev({
+      type: 'tool_execution_start', toolCallId: 'w1', toolName: 'write',
+      args: { path: 'notes.md', content: 'a\nb\n' },
+    }));
+    s = reduce(s, ev({
+      type: 'tool_execution_end', toolCallId: 'w1', toolName: 'write',
+      result: { content: [{ type: 'text', text: 'ok' }], details: { resolvedPath: '/work/notes.md' } },
+    }));
+    const t = s.items[0] as ToolItem;
+    expect(t.files).toEqual([
+      { path: '/work/notes.md', op: 'write', diff: '+1|a\n+2|b', adds: 2, dels: 0, created: true },
+    ]);
+  });
+
+  it('keeps files when start or update events replay after the end', () => {
+    const end = ev({
+      type: 'tool_execution_end', toolCallId: 'e1', toolName: 'edit',
+      result: { details: { diff: '+1|new', op: 'create', path: 'n.txt' } },
+    });
+    let s = reduce(emptyTranscript(), end);
+    s = reduce(s, ev({ type: 'tool_execution_start', toolCallId: 'e1', toolName: 'edit', args: { path: 'n.txt' } }));
+    s = reduce(s, ev({ type: 'tool_execution_update', toolCallId: 'e1', partialResult: { content: [] } }));
+    const t = s.items[0] as ToolItem;
+    expect(t.status).toBe('done');
+    expect(t.files).toEqual([{ path: 'n.txt', op: 'create', diff: '+1|new', adds: 1, dels: 0, created: true }]);
+  });
+
+  it('gives no files to tools without diff details', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'tool_execution_start', toolCallId: 'b1', toolName: 'bash', args: { command: 'ls' } }));
+    s = reduce(s, ev({
+      type: 'tool_execution_end', toolCallId: 'b1', toolName: 'bash',
+      result: { content: [{ type: 'text', text: 'x' }], details: { wallTimeMs: 4 } },
+    }));
+    expect((s.items[0] as ToolItem).files).toBeUndefined();
+  });
+
+  it('drops files when the edit result is an error', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'tool_execution_start', toolCallId: 'e2', toolName: 'edit', args: { path: 'gone.py' } }));
+    s = reduce(s, ev({
+      type: 'tool_execution_end', toolCallId: 'e2', toolName: 'edit',
+      result: { content: [{ type: 'text', text: 'no such file' }], details: { diff: '+1|would have been', op: 'update', path: 'gone.py' } },
+      isError: true,
+    }));
+    const t = s.items[0] as ToolItem;
+    expect(t.status).toBe('error');
+    expect(t.files).toBeUndefined();
+  });
+
+  it('extracts files when a write start arrives after its end', () => {
+    let s = reduce(emptyTranscript(), ev({
+      type: 'tool_execution_end', toolCallId: 'w2', toolName: 'write',
+      result: { content: [{ type: 'text', text: 'ok' }], details: { resolvedPath: '/work/late.md' } },
+    }));
+    expect((s.items[0] as ToolItem).files).toBeUndefined();
+    s = reduce(s, ev({
+      type: 'tool_execution_start', toolCallId: 'w2', toolName: 'write',
+      args: { path: 'late.md', content: 'hello\n' },
+    }));
+    expect((s.items[0] as ToolItem).files).toEqual([
+      { path: '/work/late.md', op: 'write', diff: '+1|hello', adds: 1, dels: 0, created: true },
+    ]);
+  });
+
+  it('keeps files dropped when args arrive late for an errored result', () => {
+    let s = reduce(emptyTranscript(), ev({
+      type: 'tool_execution_end', toolCallId: 'e3', toolName: 'edit',
+      result: { content: [{ type: 'text', text: 'rejected' }], details: { diff: '+1|nope', op: 'update', path: 'x.py' } },
+      isError: true,
+    }));
+    s = reduce(s, ev({ type: 'tool_execution_start', toolCallId: 'e3', toolName: 'edit', args: { path: 'x.py' } }));
+    expect((s.items[0] as ToolItem).status).toBe('error');
+    expect((s.items[0] as ToolItem).files).toBeUndefined();
+  });
+
+  it('yields the same files from history and live for the same turn', () => {
+    const live = play(edits.events);
+    const hist = reduce(emptyTranscript(), { kind: 'history', messages: edits.messages });
+    const prefix = 'Tighten the greeter';
+    expect(normalize(fromUser(live.items, prefix))).toEqual(normalize(fromUser(hist.items, prefix)));
+
+    const tools = hist.items.filter((i): i is ToolItem => i.kind === 'tool');
+    expect(tools.map((t) => t.files?.length)).toEqual([1, 1, 2]);
+    expect(tools[0]!.files![0]).toEqual({
+      path: 'src/greeter.py', op: 'update',
+      diff: ' 1|def greet(name):\n-2|    return f"Hello, {name}!"\n+2|    return f"Hello again, {name}!"\n 3|',
+      adds: 1, dels: 1, created: false,
+    });
+    expect(tools[1]!.files![0]).toMatchObject({ path: '/work/CHANGELOG.md', op: 'write', created: true, adds: 4, dels: 0 });
+    expect(tools[1]!.args).toEqual({ path: 'CHANGELOG.md', content: '# Changelog\n\n## 1.1\n- Greeter keeps its greeting.\n' });
+    expect(tools[2]!.files!.map((f) => f.path)).toEqual(['src/config.py', 'src/config.schema.json']);
+    expect(JSON.stringify(tools.map((t) => t.files))).not.toContain('xd://');
   });
 });

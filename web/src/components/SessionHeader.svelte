@@ -3,7 +3,8 @@
   import { busy, compactSession, stopActiveSession } from '../lib/actions.svelte';
   import { openOverlay } from '../lib/overlays';
   import { basename, money, sessionTitle } from '../lib/format';
-  import { active, sessionsStore, ui } from '../lib/state';
+  import { active, nav, sessionsStore, ui } from '../lib/state';
+  import { collectChanges } from '../lib/transcript/changes';
   import { Icon, InlineCode, Menu, type MenuItem } from '../lib/ui';
   import { viewport } from '../lib/ui/media.svelte';
   import ContextMeter from './ContextMeter.svelte';
@@ -13,6 +14,7 @@
   const folder = $derived(info ? basename(info.cwd) : '');
   const usage = $derived(active.stats?.contextUsage ?? info?.contextUsage ?? null);
   const model = $derived(info?.model?.name ?? info?.model?.id ?? '');
+  const changed = $derived(collectChanges(active.transcript.items));
 
   // ---- connection text: shown only when not live
   let now = $state(Date.now());
@@ -147,6 +149,17 @@
         <span class="cwd mono truncate" title={info.cwd}>{folder}</span>
       {/if}
       {#if model}<span class="chip model truncate" title={info.model?.id}>{model}</span>{/if}
+      {#if changed.files > 0}
+        <button
+          type="button"
+          class="chip files mono truncate"
+          title="Files changed in this session"
+          onclick={() => active.gwId && nav.openChanges(active.gwId)}
+        >
+          <Icon name="mark" size={13} />
+          {changed.files} {changed.files === 1 ? 'file' : 'files'} changed
+        </button>
+      {/if}
       <ContextMeter percent={usage?.percent ?? null} tokens={usage?.tokens} window={usage?.contextWindow} />
       {#if active.stats}
         <span class="cost mono" title="Session cost">{money(active.stats.cost)}</span>
@@ -249,6 +262,27 @@
     padding: 0 var(--s-2);
     box-shadow: var(--ring);
     min-height: 22px;
+  }
+  button.files {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    max-width: 24ch;
+    min-height: var(--hit);
+    padding: 0 var(--s-2);
+    border-radius: var(--r-md);
+    box-shadow: var(--ring);
+    color: var(--ink-2);
+    font-size: var(--fs-sm);
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  button.files:hover {
+    background: var(--hover);
+    color: var(--ink);
+  }
+  button.files :global(svg) {
+    flex: none;
+    color: var(--accent);
   }
   .cost {
     color: var(--ink-2);

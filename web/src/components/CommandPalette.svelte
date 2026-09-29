@@ -6,6 +6,7 @@
   import { keyLabels, shortcutFor } from '../lib/keymap';
   import { buildPaletteItems, KIND_LABEL, rankItems, type PaletteItem, type PaletteKind } from '../lib/palette/palette';
   import { active, nav, sessionsStore } from '../lib/state';
+  import { collectChanges } from '../lib/transcript/changes';
   import { Icon, InlineCode, Kbd, Sheet } from '../lib/ui';
   import type { OverlayProps } from '../lib/overlays';
   import { viewport } from '../lib/ui/media.svelte';
@@ -31,6 +32,7 @@
       activeGwId: nav.gwId,
       commands: active.commands,
       now,
+      changesCount: collectChanges(active.transcript.items).files,
       actions: paletteActions(),
     }),
   );

@@ -5,12 +5,16 @@ import { command, saved, session } from './factories';
 function actions(): PaletteActions {
   return {
     newSession: vi.fn(), nextAttention: vi.fn(), openSession: vi.fn(), resume: vi.fn(), openSettings: vi.fn(),
-    toggleTheme: vi.fn(), compact: vi.fn(), stop: vi.fn(), rename: vi.fn(), sessionInfo: vi.fn(), slash: vi.fn(),
+    toggleTheme: vi.fn(), compact: vi.fn(), stop: vi.fn(), rename: vi.fn(), sessionInfo: vi.fn(),
+    sessionChanges: vi.fn(), slash: vi.fn(),
   };
 }
 
 function ctx(over: Partial<PaletteContext> = {}): PaletteContext {
-  return { live: [], saved: [], activeGwId: null, commands: [], now: 1_700_000_100_000, actions: actions(), ...over };
+  return {
+    live: [], saved: [], activeGwId: null, commands: [], now: 1_700_000_100_000,
+    changesCount: 0, actions: actions(), ...over,
+  };
 }
 
 const ids = (list: { id: string }[]) => list.map((i) => i.id);
@@ -38,6 +42,18 @@ describe('buildPaletteItems', () => {
     const waiting = session('b', { pendingUi: [{ id: 'u', method: 'confirm' }] });
     const items = buildPaletteItems(ctx({ live: [session('a'), waiting] }));
     expect(items.find((i) => i.id === 'a:next')?.sub).toBe('1 waiting');
+  });
+
+  it('offers Session changes only when the open session has changed files', () => {
+    const a = actions();
+    const open = { live: [session('a')], activeGwId: 'a', actions: a };
+    expect(ids(buildPaletteItems(ctx(open)))).not.toContain('a:changes');
+    const changed = buildPaletteItems(ctx({ ...open, changesCount: 2 }));
+    const item = changed.find((i) => i.id === 'a:changes')!;
+    expect(item.title).toBe('Session changes');
+    expect(item.sub).toBe('2 files');
+    item.run();
+    expect(a.sessionChanges).toHaveBeenCalled();
   });
 
   it('lists slash commands only with a session open', () => {

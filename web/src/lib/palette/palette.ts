@@ -47,6 +47,7 @@ export interface PaletteActions {
   stop(): void;
   rename(): void;
   sessionInfo(): void;
+  sessionChanges(): void;
   slash(command: SlashCommand): void;
 }
 
@@ -56,6 +57,8 @@ export interface PaletteContext {
   activeGwId: string | null;
   commands: readonly SlashCommand[];
   now: number;
+  /** Distinct files the open session has changed, for the Session changes action. */
+  changesCount: number;
   actions: PaletteActions;
 }
 
@@ -92,6 +95,13 @@ export function buildPaletteItems(ctx: PaletteContext): PaletteItem[] {
       { id: 'a:compact', kind: 'action', title: 'Compact context', icon: 'compress', keywords: ['summarize', 'shrink', 'tokens'], run: a.compact },
       { id: 'a:stop', kind: 'action', title: 'Stop session', icon: 'power', keywords: ['end', 'kill', 'close', 'quit'], run: a.stop },
     );
+    if (ctx.changesCount > 0) {
+      items.push({
+        id: 'a:changes', kind: 'action', title: 'Session changes', icon: 'mark',
+        sub: `${ctx.changesCount} ${ctx.changesCount === 1 ? 'file' : 'files'}`,
+        keywords: ['diff', 'edits', 'files', 'changed', 'patches'], run: a.sessionChanges,
+      });
+    }
   }
 
   for (const s of live) {

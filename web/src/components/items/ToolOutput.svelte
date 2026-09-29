@@ -2,10 +2,16 @@
   import { ansiToHtml } from '../../lib/render/ansi';
   import { diffToHtml, looksLikeDiff } from '../../lib/render/diff';
   import { escapeHtml } from '../../lib/render/escape';
+  import type { FileChange } from '../../lib/render/diff2';
+  import DiffBlock from './DiffBlock.svelte';
 
   const MAX_LINES = 200;
 
-  let { text, error = false }: { text: string; error?: boolean } = $props();
+  let {
+    text,
+    error = false,
+    files = undefined,
+  }: { text: string; error?: boolean; files?: readonly FileChange[] } = $props();
 
   let all = $state(false);
 
@@ -21,7 +27,13 @@
   );
 </script>
 
-{#if text.trim() === ''}
+{#if files?.length && !error}
+  <div class="files">
+    {#each files as f (f.path)}
+      <DiffBlock file={f} />
+    {/each}
+  </div>
+{:else if text.trim() === ''}
   <p class="none">No output</p>
 {:else}
   <!-- eslint-disable-next-line svelte/no-at-html-tags -- escaped or ansi/diff-rendered by lib/render -->
@@ -35,6 +47,11 @@
 {/if}
 
 <style>
+  .files {
+    display: grid;
+    gap: var(--s-2);
+    min-width: 0;
+  }
   .out {
     max-height: 360px;
     overflow: auto;

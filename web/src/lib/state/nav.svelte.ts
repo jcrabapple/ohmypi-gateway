@@ -5,14 +5,24 @@ import type { SavedSession, SessionInfo } from '../api/types';
 import { sessionsStore } from './sessions.svelte';
 import { ui } from './ui.svelte';
 
-const ROUTE = /^#\/s\/([\w-]+)$/;
+const ROUTE = /^#\/s\/([\w-]+)(\/changes)?$/;
 
-export function parseHash(hash: string): string | null {
-  return ROUTE.exec(hash)?.[1] ?? null;
+export interface HashRoute {
+  gwId: string;
+  changes: boolean;
+}
+
+export function parseHash(hash: string): HashRoute | null {
+  const m = ROUTE.exec(hash);
+  return m ? { gwId: m[1]!, changes: m[2] === '/changes' } : null;
 }
 
 class Nav {
-  gwId = $state<string | null>(parseHash(globalThis.location?.hash ?? ''));
+  gwId = $state<string | null>(parseHash(globalThis.location?.hash ?? '')?.gwId ?? null);
+  /** Which surface of the open session is showing. */
+  view = $state<'transcript' | 'changes'>(
+    parseHash(globalThis.location?.hash ?? '')?.changes ? 'changes' : 'transcript',
+  );
   /** Saved session file being resumed right now, for the spinner on its row. */
   resuming = $state<string | null>(null);
   /** The last session that died on us, so the new-session sheet can offer its draft. */
@@ -21,7 +31,9 @@ class Nav {
   /** Start listening to the URL. Returns a stop function. */
   start(): () => void {
     const on = () => {
-      this.gwId = parseHash(location.hash);
+      const r = parseHash(location.hash);
+      this.gwId = r?.gwId ?? null;
+      this.view = r?.changes ? 'changes' : 'transcript';
     };
     on();
     window.addEventListener('hashchange', on);
@@ -30,14 +42,27 @@ class Nav {
 
   open(gwId: string): void {
     ui.close('drawer');
+    this.view = 'transcript';
     if (location.hash === `#/s/${gwId}`) this.gwId = gwId;
     else location.hash = `#/s/${gwId}`;
+  }
+
+  /** The open session's per-session Changes page. */
+  openChanges(gwId: string): void {
+    ui.close('drawer');
+    this.view = 'changes';
+    if (location.hash === `#/s/${gwId}/changes`) {
+      this.gwId = gwId;
+    } else {
+      location.hash = `#/s/${gwId}/changes`;
+    }
   }
 
   home(): void {
     ui.close('drawer');
     if (location.hash) history.pushState(null, '', location.pathname + location.search);
     this.gwId = null;
+    this.view = 'transcript';
   }
 
   /** Resume a saved transcript. If omp is already running it, open the live session instead. */

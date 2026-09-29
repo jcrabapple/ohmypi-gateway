@@ -1,7 +1,8 @@
 <script lang="ts">
   import { registerComposer } from '../lib/composer/bridge';
-  import { active } from '../lib/state';
+  import { active, nav } from '../lib/state';
   import ApprovalPanel from './ApprovalPanel.svelte';
+  import ChangesView from './ChangesView.svelte';
   import Composer from './Composer.svelte';
   import SessionHeader from './SessionHeader.svelte';
   import Transcript from './Transcript.svelte';
@@ -16,23 +17,28 @@
   });
 
   const request = $derived(active.pendingUi[0] ?? null);
+  const changes = $derived(nav.view === 'changes');
 </script>
 
 <div class="view">
   <SessionHeader />
-  <Transcript onstarter={(text) => composer?.setText(text)} />
-  <div class="dock">
-    {#if request}
-      <div class="approval">
-        <ApprovalPanel {request} index={1} total={active.pendingUi.length} />
+  {#if changes}
+    <ChangesView {gwId} items={active.transcript.items} />
+  {:else}
+    <Transcript onstarter={(text) => composer?.setText(text)} />
+    <div class="dock">
+      {#if request}
+        <div class="approval">
+          <ApprovalPanel {request} index={1} total={active.pendingUi.length} />
+        </div>
+      {/if}
+      <div class="composer" class:hidden={!!request} inert={!!request}>
+        {#key gwId}
+          <Composer bind:this={composer} {gwId} />
+        {/key}
       </div>
-    {/if}
-    <div class="composer" class:hidden={!!request} inert={!!request}>
-      {#key gwId}
-        <Composer bind:this={composer} {gwId} />
-      {/key}
     </div>
-  </div>
+  {/if}
 </div>
 
 <style>

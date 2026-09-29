@@ -130,6 +130,9 @@ export function paletteActions(): PaletteActions {
     stop: () => void stopActiveSession(),
     rename: askRename,
     sessionInfo: () => openOverlay('session-info'),
+    sessionChanges: () => {
+      if (nav.gwId) nav.openChanges(nav.gwId);
+    },
     slash: useSlash,
   };
 }

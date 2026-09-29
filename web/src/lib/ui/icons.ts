@@ -15,6 +15,7 @@ export const ICONS = {
   sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   'arrow-up': '<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>',
   'arrow-down': '<path d="M12 5v14M5.5 12.5L12 19l6.5-6.5"/>',
+  'arrow-left': '<path d="M19 12H5M11.5 5.5L5 12l6.5 6.5"/>',
   stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor" stroke="none"/>',
   paperclip: '<path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.2-8.2a3.4 3.4 0 0 1 4.8 4.8L9.9 17a1.8 1.8 0 0 1-2.6-2.6l7.2-7.2"/>',
   image: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.4"/><path d="M4.5 17l4.5-4.5 3.5 3.5 2.5-2.5 4.5 4.5"/>',

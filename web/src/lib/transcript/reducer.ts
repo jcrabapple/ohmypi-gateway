@@ -6,6 +6,7 @@
 // always taken from those blocks. Deltas are never appended, which keeps replays,
 // resumes and a missed frame harmless.
 import { isBlockingUi } from '../api/types';
+import { extractFiles } from '../render/diff2';
 import type {
   AssistantMessage, ContentBlock, CustomMessage, ModelRef, OmpEvent, OmpMessage,
   ToolCallBlock, ToolResultMessage, UiRequest, UnknownEvent, UserMessage,
@@ -366,6 +367,17 @@ function upsertTool(d: Work, p: ToolPatch): void {
     endedAt: p.endedAt ?? prev?.endedAt,
     raw: { ...rec(prev?.raw), ...(p.call !== undefined && { call: p.call }), ...(p.result !== undefined && { result: p.result }) },
   };
+  // Results carry the diff details (edit) or just enough to synthesize from the
+  // call arguments (write). Computed whenever a result has been applied and the
+  // inputs for this tool are present, so a late tool_execution_start still
+  // yields the same files as an in-order stream. Errored results contribute
+  // nothing: the change never happened.
+  if (p.result !== undefined || rec(prev?.raw)?.result !== undefined) {
+    const files = status === 'error' ? [] : extractFiles(item.toolName, item.args, item.details);
+    item.files = files.length ? files : undefined;
+  } else {
+    item.files = prev?.files;
+  }
   if (i >= 0) d.items[i] = item;
   else place(d, item);
 }
