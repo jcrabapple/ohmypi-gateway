@@ -108,8 +108,13 @@ if dist_active:
         check("asset-immutable", code == 200 and "immutable" in (hdrs.get("Cache-Control") or ""), assets[0].name)
     if (dist_dir / "sw.js").is_file():
         code, _, hdrs = req("GET", "/sw.js", token=None)
+        # Cloudflare consumes Cloudflare-CDN-Cache-Control at the edge and strips it,
+        # so it's only visible when talking to the gateway directly.
+        via_cf = hdrs.get("cf-cache-status") is not None
         check("sw-no-store", code == 200 and hdrs.get("Cache-Control") == "no-store"
-              and hdrs.get("CDN-Cache-Control") == "no-store" and hdrs.get("Cloudflare-CDN-Cache-Control") == "no-store")
+              and hdrs.get("CDN-Cache-Control") == "no-store"
+              and (via_cf or hdrs.get("Cloudflare-CDN-Cache-Control") == "no-store"),
+              f"cf={hdrs.get('cf-cache-status')}")
         sw_src = (dist_dir / "sw.js").read_text()
         check("sw-inlines-routing", "importScripts" not in sw_src and "ompSwRouting" in sw_src and "__BUILD__" not in sw_src)
         code, _, _ = req("GET", "/sw-routing.js")
