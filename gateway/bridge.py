@@ -27,8 +27,16 @@ log = logging.getLogger("ohmpi-gateway.bridge")
 OMP_BIN = os.path.expanduser("~/.bun/bin/omp")
 OMP_AGENT_DIR = Path(os.path.expanduser("~/.omp/agent"))
 
-DEFAULT_APPROVAL_MODE = "yolo"
+APPROVAL_MODES = ("yolo", "write", "always-ask")
+DEFAULT_APPROVAL_MODE = os.environ.get("OMPGW_DEFAULT_APPROVAL", "yolo")
+if DEFAULT_APPROVAL_MODE not in APPROVAL_MODES:
+    raise SystemExit(f"OMPGW_DEFAULT_APPROVAL must be one of {APPROVAL_MODES}")
 
+
+
+# extension_ui_request methods that block omp until answered. The rest
+# (notify, setStatus, setWidget, setTitle, set_editor_text) are fire-and-forget.
+UI_DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
 
 class RpcError(Exception):
     """A command failed at the omp layer (success: false)."""
@@ -91,6 +99,10 @@ class OmpSession:
 
         self._turn_waiters: list[asyncio.Future] = []
         self._negotiation: asyncio.Task | None = None
+        # Dialog-style extension UI requests (tool approvals, questions) omp is
+        # blocked on. Tracked so late-joining and REST-only clients can see and
+        # answer them. First answer wins.
+        self.pending_ui: dict[str, dict] = {}
 
         self.proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
@@ -107,7 +119,10 @@ class OmpSession:
             log.warning("[%s] v2 negotiation failed, staying on v1", self.gw_id)
 
     def _build_args(self) -> list[str]:
-        args = [OMP_BIN, "--mode", "rpc", "--no-ui", "--no-title",
+        # No --no-ui: the gateway is a real UI host. Dialogs (tool approvals in
+        # write/always-ask, ask-tool questions) surface as pendingUi for clients
+        # to answer; with --no-ui omp just fails approval-gated tool calls.
+        args = [OMP_BIN, "--mode", "rpc", "--no-title",
                 "--cwd", self.cwd, "--approval-mode", self.approval_mode]
         if self.resume_session_file:
             args += ["-r", self.resume_session_file]
@@ -209,8 +224,14 @@ class OmpSession:
             self.omp_session_name = info.get("name") or info.get("sessionName") or self.omp_session_name
         elif ftype == "agent_start":
             self.streaming = True
+        elif ftype == "extension_ui_request" and obj.get("method") in UI_DIALOG_METHODS:
+            self.pending_ui[obj["id"]] = obj
         elif ftype == "agent_end":
             self.streaming = False
+            if self.pending_ui:
+                # omp abandons open dialogs when a turn ends (abort, error).
+                for rid in list(self.pending_ui):
+                    await self._resolve_ui_locally(rid, "turn ended")
             for w in list(self._turn_waiters):
                 if not w.done():
                     w.set_result(True)
@@ -259,6 +280,29 @@ class OmpSession:
                 self.subscribers.discard(q)
 
     # ----------------------------------------------------------------- writes
+
+    async def answer_ui(self, request_id: str, response: dict) -> dict:
+        """Answer a pending dialog. Raises KeyError if it is not pending
+        (already answered by another client, or never existed)."""
+        req = self.pending_ui.pop(request_id)
+        frame = {"type": "extension_ui_response", "id": request_id}
+        for k in ("value", "confirmed", "cancelled"):
+            if k in response:
+                frame[k] = response[k]
+        if len(frame) == 2:
+            raise ValueError("response needs one of: value, confirmed, cancelled")
+        opts = req.get("options")
+        if "value" in frame and req.get("method") == "select" and opts and frame["value"] not in opts:
+            self.pending_ui[request_id] = req
+            raise ValueError(f"value must be one of {opts}")
+        await self.send_raw(frame)
+        await self._publish({"type": "ui_resolved", "id": request_id, "method": req.get("method"),
+                             "response": {k: v for k, v in frame.items() if k not in ("type", "id")}})
+        return frame
+
+    async def _resolve_ui_locally(self, request_id: str, reason: str) -> None:
+        if self.pending_ui.pop(request_id, None) is not None:
+            await self._publish({"type": "ui_resolved", "id": request_id, "reason": reason})
 
     async def send_raw(self, frame: dict) -> None:
         if not self.proc or self.proc.stdin is None or self.proc.stdin.is_closing():
@@ -445,6 +489,7 @@ class OmpSession:
             "messageCount": st.get("messageCount"),
             "contextUsage": st.get("contextUsage"),
             "lastEventSeq": self._backlog_seq,
+            "pendingUi": list(self.pending_ui.values()),
         }
 
 

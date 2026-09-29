@@ -104,6 +104,11 @@
   .working { max-width: 56rem; margin: 0 auto; color: var(--amber); font-size: .75rem; font-family: var(--mono); }
   .notice { max-width: 56rem; margin: 0 auto .6rem; font-size: .78rem; color: var(--fg-faint);
             font-family: var(--mono); text-align: center; }
+  .ask { max-width: 56rem; margin: .4rem auto .8rem; border: 1px solid var(--yellow, #d29922); border-radius: 10px;
+         padding: .7rem .8rem; background: color-mix(in srgb, var(--yellow, #d29922) 8%, transparent); }
+  .ask pre { white-space: pre-wrap; word-break: break-word; margin: .3rem 0 .6rem; font-size: .85rem; }
+  .ask .row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .4rem; }
+  .ask textarea { flex: 1; min-width: 12rem; }
   .composer { border-top: 1px solid var(--border-soft); padding: .7rem .8rem calc(.7rem + env(safe-area-inset-bottom));
               display: flex; gap: .5rem; align-items: flex-end; }
   .composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 40vh; font-family: var(--sans); font-size: .92rem; }
@@ -133,7 +138,7 @@
 <script src="/static/app.js"></script>
 <script defer src="/static/vendor/alpine.min.js"></script>
 </head>
-<body x-data="omp()" x-init="init()">
+<body x-data="omp()">
 
 <div class="gate" x-show="phase === 'loading'"><span class="faint mono">…</span></div>
 
@@ -249,7 +254,26 @@
                 <template x-if="it.kind === 'notice'"><div class="notice" x-text="it.text"></div></template>
               </div>
             </template>
-            <div class="working" x-show="busy">● working… <button class="ghost" style="color:var(--red);font-size:.75rem" @click="abort()">abort</button></div>
+            <template x-for="u in pendingUi" :key="u.id">
+              <div class="ask" role="alertdialog" :aria-label="u.title || 'omp needs input'">
+                <div class="who" x-text="u.method === 'select' && /^Allow tool/.test(u.title || '') ? 'approval needed' : 'omp asks'"></div>
+                <pre x-text="u.title || u.message || u.method"></pre>
+                <p x-show="u.message && u.title" x-text="u.message"></p>
+                <div class="row" x-show="u.method === 'select'">
+                  <template x-for="o in (u.options || [])"><button :class="/deny|reject|no/i.test(o) ? 'danger' : 'primary'" @click="answerUi(u, {value: o})" x-text="o"></button></template>
+                </div>
+                <div class="row" x-show="u.method === 'confirm'">
+                  <button class="primary" @click="answerUi(u, {confirmed: true})">Yes</button>
+                  <button class="danger" @click="answerUi(u, {confirmed: false})">No</button>
+                </div>
+                <form class="row" x-show="u.method === 'input' || u.method === 'editor'" @submit.prevent="answerUi(u, {value: uiDraft[u.id] || ''})">
+                  <textarea rows="2" x-model="uiDraft[u.id]" :placeholder="u.placeholder || ''"></textarea>
+                  <button class="primary" type="submit">Send</button>
+                </form>
+                <button class="ghost" style="font-size:.75rem" @click="answerUi(u, {cancelled: true})">dismiss</button>
+              </div>
+            </template>
+            <div class="working" x-show="busy && !pendingUi.length">● working… <button class="ghost" style="color:var(--red);font-size:.75rem" @click="abort()">abort</button></div>
           </div>
           <form class="composer" @submit.prevent="send()">
             <textarea x-model="draft" @keydown="keydown($event)" rows="2" aria-label="Message"

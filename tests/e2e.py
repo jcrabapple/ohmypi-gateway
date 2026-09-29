@@ -194,6 +194,40 @@ try:
 finally:
     ok("DELETE", f"/api/sessions/{gid}")
 
+# --------------------------------------------------- approvals (always-ask)
+
+ask = ok("POST", "/api/sessions", {"cwd": "/tmp", "thinking": "off", "approvalMode": "always-ask"})
+aid = ask["gwId"]
+try:
+    import time as _t
+    ok("POST", f"/api/sessions/{aid}/prompt",
+       {"message": "Run `echo gw-approval-probe` with bash once, then reply with its output.", "mode": "prompt"})
+    pend = []
+    for _ in range(90):
+        pend = ok("GET", f"/api/sessions/{aid}/ui")["pending"]
+        if pend:
+            break
+        _t.sleep(1)
+    check("approval-surfaced", bool(pend) and pend[0]["method"] == "select" and "Approve" in pend[0].get("options", []),
+          repr((pend[0].get("title") if pend else "")[:50]))
+    check("approval-in-session-info", bool(pend) and ok("GET", f"/api/sessions/{aid}")["pendingUi"][0]["id"] == pend[0]["id"])
+    code, _, _ = req("POST", f"/api/sessions/{aid}/ui/{pend[0]['id']}", {"value": "Maybe"})
+    check("approval-bad-option-422", code == 422)
+    code, _, _ = req("POST", f"/api/sessions/{aid}/ui/{pend[0]['id']}", {"value": "Approve"})
+    check("approval-answered", code == 200)
+    code, _, _ = req("POST", f"/api/sessions/{aid}/ui/{pend[0]['id']}", {"value": "Approve"})
+    check("approval-double-answer-409", code == 409)
+    for _ in range(90):
+        if not ok("GET", f"/api/sessions/{aid}")["isStreaming"]:
+            break
+        _t.sleep(1)
+    evs = [e["event"] for e in ok("GET", f"/api/sessions/{aid}/events")["events"]]
+    ran = [e for e in evs if e.get("type") == "tool_execution_end" and "gw-approval-probe" in json.dumps(e.get("result"))]
+    check("approved-tool-ran", bool(ran) and not ran[0].get("isError"))
+    check("ui-resolved-event", any(e.get("type") == "ui_resolved" and e.get("id") == pend[0]["id"] for e in evs))
+finally:
+    ok("DELETE", f"/api/sessions/{aid}")
+
 check("stop-reaped", all(s["gwId"] != gid for s in ok("GET", "/api/sessions?include_saved=false")["live"]))
 
 print(f"\n{BASE}: " + ("all green" if not failures else f"FAILURES: {failures}"))

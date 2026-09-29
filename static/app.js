@@ -12,7 +12,7 @@ function omp() {
     showNew: false, ns: { cwd: '', model: '', thinking: '', approvalMode: 'yolo' }, spawning: false,
     active: null, info: null, items: [], byMsg: {}, byTool: {},
     ws: null, wsState: 'off', lastSeq: 0, retry: 0, retryTimer: null,
-    draft: '', thinking: '',
+    draft: '', thinking: '', pendingUi: [], uiDraft: {},
     configRaw: '', configMsg: '', configErr: false, skills: [], modelsRaw: '', modelQuery: '',
     usageRaw: '', stateRows: [], statsRaw: '',
 
@@ -87,6 +87,11 @@ function omp() {
     // ---------------------------------------------------------------- sessions
     async spawn() {
       this.spawning = true;
+      // Approval modes block on you; ask for notification permission while we
+      // still have a user gesture, so backgrounded tabs can ping.
+      if (this.ns.approvalMode !== 'yolo' && 'Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+      }
       const body = { approvalMode: this.ns.approvalMode };
       for (const k of ['cwd', 'model', 'thinking']) if (this.ns[k].trim()) body[k] = this.ns[k].trim();
       try {
@@ -124,17 +129,22 @@ function omp() {
     },
 
     async open(id) {
+      // Guard against overlapping opens (double clicks, hash + click): only the
+      // newest call may write into the transcript.
+      const ticket = this._openTicket = (this._openTicket || 0) + 1;
       this.closeWs();
       this.active = id; this.tab = 'chat'; this.drawer = false;
-      this.items = []; this.byMsg = {}; this.byTool = {};
+      this.items = []; this.byMsg = {}; this.byTool = {}; this.pendingUi = [];
       history.replaceState(null, '', '#s=' + id);
       try {
         this.info = await this.api('/api/sessions/' + id);
         this.thinking = this.info.thinkingLevel || '';
+        this.pendingUi = this.info.pendingUi || [];
         // Snapshot the event cursor BEFORE reading history: anything newer
         // arrives over the socket, anything older is in the history.
         this.lastSeq = this.info.lastEventSeq || 0;
         const hist = await this.api('/api/sessions/' + id + '/messages');
+        if (ticket !== this._openTicket) return;
         for (const m of hist.messages || []) this.addHistory(m);
       } catch (e) {
         this.toast('Could not open session: ' + e.message);
@@ -142,6 +152,7 @@ function omp() {
         history.replaceState(null, '', location.pathname);
         return;
       }
+      if (ticket !== this._openTicket) return;
       this.scroll(true);
       this.retry = 0; this.connect();
     },
@@ -197,6 +208,22 @@ function omp() {
       switch (e.type) {
         case 'auth_ok':
           if (e.session && this.info) Object.assign(this.info, e.session);
+          if (e.session) this.pendingUi = e.session.pendingUi || [];
+          return;
+        case 'extension_ui_request':
+          if (['select', 'confirm', 'input', 'editor'].includes(e.method) && !this.pendingUi.some(u => u.id === e.id)) {
+            this.pendingUi.push(e);
+            this.scroll(true);
+            if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+              new Notification('omp needs you', { body: e.title || e.method, tag: e.id });
+            }
+          } else if (e.method === 'notify') {
+            this.toast(e.message || e.title || 'notice');
+          }
+          return;
+        case 'ui_resolved':
+          this.pendingUi = this.pendingUi.filter(u => u.id !== e.id);
+          delete this.uiDraft[e.id];
           return;
         case 'agent_start': if (this.info) this.info.isStreaming = true; return;
         case 'agent_end': if (this.info) this.info.isStreaming = false; this.refresh(); return;
@@ -324,6 +351,14 @@ function omp() {
     },
     send() { return this.busy ? this.post('steer', 'steer') : this.post('prompt', ''); },
     queue() { return this.post('follow_up', 'queued'); },
+    async answerUi(u, response) {
+      try {
+        await this.api('/api/sessions/' + this.active + '/ui/' + encodeURIComponent(u.id), { method: 'POST', body: response });
+      } catch (e) { this.toast(e.message); }
+      // ui_resolved over the socket removes the card; do it now too in case
+      // another client answered first (409).
+      this.pendingUi = this.pendingUi.filter(x => x.id !== u.id);
+    },
     async abort() {
       try { await this.api('/api/sessions/' + this.active + '/abort', { method: 'POST' }); }
       catch (e) { this.toast(e.message); }

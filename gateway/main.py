@@ -533,6 +533,28 @@ async def raw_rpc(gw_id: str, request: Request):
     return {"data": await get_session_or_404(gw_id).command(ctype, timeout=min(timeout, 300), **body)}
 
 
+@app.get("/api/sessions/{gw_id}/ui")
+async def ui_pending(gw_id: str):
+    """Dialogs omp is blocked on (tool approvals in always-ask mode, ask-tool
+    questions, extension prompts). Each is an extension_ui_request from
+    docs/rpc.md."""
+    return {"pending": list(get_session_or_404(gw_id).pending_ui.values())}
+
+
+@app.post("/api/sessions/{gw_id}/ui/{request_id}")
+async def ui_answer(gw_id: str, request_id: str, request: Request):
+    """Answer a pending dialog with {value}, {confirmed} or {cancelled: true}.
+    Tool approvals are selects: {"value": "Approve"} or {"value": "Deny"}.
+    409 if another client already answered it."""
+    body = await json_body(request)
+    try:
+        return {"ok": True, "sent": await get_session_or_404(gw_id).answer_ui(request_id, body)}
+    except KeyError:
+        raise HTTPException(409, "not pending (already answered, or the turn ended)")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
 @app.get("/api/sessions/{gw_id}/events")
 async def events(gw_id: str, after: int = 0):
     sess = get_session_or_404(gw_id)
@@ -630,8 +652,16 @@ async def ws_session(ws: WebSocket, gw_id: str, after: int = 0):
             if frame["type"] == "auth":
                 continue
             sess.touch()
-            if frame["type"] in ("extension_ui_response", "host_tool_result",
-                                 "host_tool_update", "host_uri_result"):
+            if frame["type"] == "extension_ui_response":
+                try:
+                    await sess.answer_ui(str(frame.get("id")), frame)
+                except KeyError:
+                    await send({"seq": 0, "event": {"type": "ws_error", "error": "ui request is not pending (already answered?)",
+                                                    "id": frame.get("id")}})
+                except ValueError as e:
+                    await send({"seq": 0, "event": {"type": "ws_error", "error": str(e), "id": frame.get("id")}})
+                continue
+            if frame["type"] in ("host_tool_result", "host_tool_update", "host_uri_result"):
                 await sess.send_raw(frame)
                 continue
             client_id = frame.pop("id", None)
