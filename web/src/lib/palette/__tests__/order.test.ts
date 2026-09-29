@@ -9,7 +9,7 @@ describe('railOrder', () => {
     const a = session('a');
     const b = session('b');
     const c = session('c');
-    expect(railOrder({ needsYou: [c], running: [b], idle: [a] }).map((s) => s.gwId)).toEqual(['c', 'b', 'a']);
+    expect(railOrder({ needsYou: [c], running: [b], review: [], idle: [a] }).map((s) => s.gwId)).toEqual(['c', 'b', 'a']);
   });
 });
 

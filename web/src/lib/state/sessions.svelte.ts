@@ -4,6 +4,7 @@ import type { SavedSession, SessionInfo } from '../api/types';
 import { cacheKey, idbGet, idbSet } from '../platform/idb';
 import { active } from './active.svelte';
 import { groupSessions } from './grouping';
+import { reviewed } from './reviewed.svelte';
 
 const POLL_MS = 5000;
 const CACHE_KEY = cacheKey('sessions-list');
@@ -22,7 +23,7 @@ class SessionsStore {
   todoActive = $state<Set<string>>(new Set());
   /** Last time each session's /state confirmed its todo state; entries go stale without refreshes. */
   private lastTodoRefresh = new Map<string, number>();
-  groups = $derived(groupSessions(this.live, this.saved, Date.now(), this.todoActive));
+  groups = $derived(groupSessions(this.live, this.saved, Date.now(), this.todoActive, reviewed.needsReview));
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private inflight: AbortController | null = null;

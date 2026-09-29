@@ -3,8 +3,8 @@ import type { SessionInfo } from '../api/types';
 import type { SessionGroups } from '../state/grouping';
 
 /** Live sessions top to bottom as the rail lists them. */
-export function railOrder(groups: Pick<SessionGroups, 'needsYou' | 'running' | 'idle'>): SessionInfo[] {
-  return [...groups.needsYou, ...groups.running, ...groups.idle];
+export function railOrder(groups: Pick<SessionGroups, 'needsYou' | 'running' | 'review' | 'idle'>): SessionInfo[] {
+  return [...groups.needsYou, ...groups.running, ...groups.review, ...groups.idle];
 }
 
 /** The next session with a request waiting, scanning down the rail from `currentId` and wrapping. Null when none is waiting. */

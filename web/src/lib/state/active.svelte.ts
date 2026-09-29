@@ -17,6 +17,7 @@ import { emptyTranscript, reduce } from '../transcript/reducer';
 import type { TranscriptInput, TranscriptState } from '../transcript/types';
 import { hasActiveTodo } from './plan';
 import { plan } from './plan.svelte';
+import { reviewed } from './reviewed.svelte';
 import { sessionsStore } from './sessions.svelte';
 
 export type Phase = 'idle' | 'loading' | 'ready' | 'gone' | 'error';
@@ -121,6 +122,9 @@ class ActiveSession {
         this.setInfo(info);
         if (mode !== 'prompt') void this.refreshQueued();
       }
+      // The user is working in here again: the review pin only makes sense on a settled session.
+      // Cleared after the gateway accepts the prompt, so a failed send keeps the pin.
+      reviewed.unflag(gwId);
       return true;
     } catch (e) {
       if (this.gwId === gwId) {

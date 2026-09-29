@@ -1,14 +1,25 @@
 <script module lang="ts">
-  export type SessionStatus = 'needs' | 'running' | 'idle';
+  export type SessionStatus = 'needs' | 'review' | 'running' | 'idle';
 </script>
 
 <script lang="ts">
-  const LABEL: Record<SessionStatus, string> = { needs: 'Needs you', running: 'Running', idle: 'Idle' };
+  import Icon from '../lib/ui/Icon.svelte';
+
+  const LABEL: Record<SessionStatus, string> = {
+    needs: 'Needs you',
+    review: 'Ready for review',
+    running: 'Running',
+    idle: 'Idle',
+  };
 
   let { status }: { status: SessionStatus } = $props();
 </script>
 
-<span class="glyph {status}" role="img" aria-label={LABEL[status]}></span>
+{#if status === 'review'}
+  <span class="glyph review" role="img" aria-label={LABEL[status]}><Icon name="flag" size={12} /></span>
+{:else}
+  <span class="glyph {status}" role="img" aria-label={LABEL[status]}></span>
+{/if}
 
 <style>
   .glyph {
@@ -28,6 +39,13 @@
   .needs {
     background: var(--warn);
     box-shadow: 0 0 0 3px var(--warn-soft);
+  }
+  .review {
+    width: auto;
+    height: auto;
+    margin: 0;
+    display: inline-flex;
+    color: var(--warn);
   }
   @keyframes pulse {
     50% { opacity: 0.35; }

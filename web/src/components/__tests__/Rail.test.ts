@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SavedSession, SessionInfo } from '../../lib/api/types';
-import { sessionsStore } from '../../lib/state';
+import { storageKey } from '../../lib/platform/storage';
+import { reviewed, sessionsStore } from '../../lib/state';
 import Rail from '../Rail.svelte';
-import { cleanup, render } from './mount';
+import { cleanup, render, settle } from './mount';
 
 function live(gwId: string, over: Partial<SessionInfo> = {}): SessionInfo {
   return {
@@ -28,6 +29,9 @@ afterEach(() => {
   cleanup();
   sessionsStore.live = [];
   sessionsStore.saved = [];
+  reviewed.needsReview = new Set();
+  reviewed.done = new Set();
+  localStorage.clear();
 });
 
 describe('Rail', () => {
@@ -56,5 +60,32 @@ describe('Rail', () => {
     const { target } = render(Rail, {});
     expect(target.textContent).toContain('need');
     expect(target.textContent).not.toContain('dead');
+  });
+
+  it('orders Ready for review below Needs you and gives pinned rows an Unpin action', async () => {
+    sessionsStore.live = [live('pinned'), live('plain')];
+    reviewed.flag('pinned');
+    const { target } = render(Rail, {});
+    const headings = [...target.querySelectorAll('h2')].map((h) => h.textContent?.replace(/\d+$/, '').trim());
+    expect(headings).toEqual(['Ready for review', 'Idle']);
+    expect(target.querySelector('.glyph.review')).not.toBeNull();
+
+    const row = [...target.querySelectorAll('.row')].find((r) => r.textContent?.includes('pinned'))!;
+    row.querySelector<HTMLButtonElement>('button[aria-label="Row menu"]')!.click();
+    await settle();
+    expect([...target.querySelectorAll('button')].some((b) => b.textContent?.includes('Unpin'))).toBe(true);
+  });
+
+  it('offers Mark ready for review in unpinned rows and runs it', async () => {
+    sessionsStore.live = [live('plain')];
+    const { target } = render(Rail, {});
+    target.querySelector<HTMLButtonElement>('button[aria-label="Row menu"]')!.click();
+    await settle();
+    const item = [...target.querySelectorAll('button')].find((b) => b.textContent?.includes('Mark ready for review'));
+    expect(item).toBeDefined();
+    item!.click();
+    await settle();
+    expect(reviewed.needsReview.has('plain')).toBe(true);
+    expect(JSON.parse(localStorage.getItem(storageKey('device', 'ompgw-needs-review'))!)).toEqual(['plain']);
   });
 });

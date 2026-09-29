@@ -2,8 +2,8 @@
   import { shortcutText } from '../lib/keymap';
   import { openOverlay, openSettings } from '../lib/overlays';
   import { basename, relativeTime, savedFolderLabel, savedTitle, sessionTitle, uniqueCwds } from '../lib/format';
-  import { active, auth, nav, sessionsStore, ui } from '../lib/state';
-  import { confirm, Icon, Kbd } from '../lib/ui';
+  import { active, auth, nav, reviewed, sessionsStore, ui } from '../lib/state';
+  import { confirm, Icon, Kbd, type MenuItem } from '../lib/ui';
   import type { SessionInfo } from '../lib/api/types';
   import ConnectionDot from './ConnectionDot.svelte';
   import RailRow from './RailRow.svelte';
@@ -13,7 +13,8 @@
   const liveCwds = $derived(uniqueCwds(sessionsStore.live));
   const empty = $derived(
     sessionsStore.loaded &&
-      !groups.needsYou.length && !groups.running.length && !groups.idle.length && !groups.history.length,
+      !groups.needsYou.length && !groups.review.length && !groups.running.length && !groups.idle.length &&
+      !groups.history.length,
   );
   // Rows show "5m" style stamps; one shared tick keeps them current without a timer per row.
   let now = $state(Date.now());
@@ -22,11 +23,20 @@
     return () => clearInterval(t);
   });
 
-  const live: { key: 'needsYou' | 'running' | 'idle'; label: string; status: SessionStatus }[] = [
+  const live: { key: 'needsYou' | 'review' | 'running' | 'idle'; label: string; status: SessionStatus }[] = [
     { key: 'needsYou', label: 'Needs you', status: 'needs' },
+    { key: 'review', label: 'Ready for review', status: 'review' },
     { key: 'running', label: 'Running', status: 'running' },
     { key: 'idle', label: 'Idle', status: 'idle' },
   ];
+
+  /** Live rows carry the review pin actions; saved rows have no gateway id, so no menu. */
+  function rowMenu(s: SessionInfo): MenuItem[] {
+    if (reviewed.needsReview.has(s.gwId)) {
+      return [{ id: 'unpin', label: 'Unpin', icon: 'x', onselect: () => reviewed.unflag(s.gwId) }];
+    }
+    return [{ id: 'review', label: 'Mark ready for review', icon: 'flag', onselect: () => reviewed.flag(s.gwId) }];
+  }
 
   function liveSub(s: SessionInfo): string {
     const model = s.model?.name ?? s.model?.id;
@@ -95,6 +105,7 @@
                 status={g.status}
                 active={nav.gwId === s.gwId}
                 badge={s.pendingUi.length}
+                menu={rowMenu(s)}
                 onclick={() => nav.open(s.gwId)}
               />
             {/each}

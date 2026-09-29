@@ -9,6 +9,7 @@ export interface HistoryGroup {
 
 export interface SessionGroups {
   needsYou: SessionInfo[];
+  review: SessionInfo[];
   running: SessionInfo[];
   idle: SessionInfo[];
   history: HistoryGroup[];
@@ -41,14 +42,18 @@ export function historyBucket(mtimeSec: number, now: number): HistoryGroup['key'
 
 /** Live sessions that have exited are dropped; saved sessions that are live right now are dropped.
  *  `todoActive` holds sessions whose last known state has an in_progress todo task; they read as
- *  working even between agent turns. */
+ *  working even between agent turns. `needsReview` holds sessions the user pinned for review;
+ *  they read as ready for review while idle, but anything working or asking for input outranks
+ *  the pin. */
 export function groupSessions(
   live: readonly SessionInfo[],
   saved: readonly SavedSession[],
   now: number = Date.now(),
   todoActive: ReadonlySet<string> = new Set(),
+  needsReview: ReadonlySet<string> = new Set(),
 ): SessionGroups {
   const needsYou: SessionInfo[] = [];
+  const review: SessionInfo[] = [];
   const running: SessionInfo[] = [];
   const idle: SessionInfo[] = [];
   const liveFiles = new Set<string>();
@@ -57,6 +62,7 @@ export function groupSessions(
     if (s.ompSessionFile) liveFiles.add(s.ompSessionFile);
     if (s.pendingUi.length > 0) needsYou.push(s);
     else if (s.isStreaming || todoActive.has(s.gwId)) running.push(s);
+    else if (needsReview.has(s.gwId)) review.push(s);
     else idle.push(s);
   }
 
@@ -74,5 +80,5 @@ export function groupSessions(
     const items = buckets.get(key);
     if (items?.length) history.push({ key, label: LABELS[key], items });
   }
-  return { needsYou, running, idle, history };
+  return { needsYou, review, running, idle, history };
 }

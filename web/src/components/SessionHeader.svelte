@@ -3,9 +3,9 @@
   import { busy, compactSession, stopActiveSession } from '../lib/actions.svelte';
   import { openOverlay } from '../lib/overlays';
   import { basename, money, sessionTitle } from '../lib/format';
-  import { active, nav, plan, sessionsStore, settings, ui } from '../lib/state';
+  import { active, nav, plan, reviewed, sessionsStore, settings, ui } from '../lib/state';
   import { collectChanges } from '../lib/transcript/changes';
-  import { Icon, InlineCode, Menu, type MenuItem } from '../lib/ui';
+  import { Icon, InlineCode, Menu, toast, type MenuItem } from '../lib/ui';
   import { viewport } from '../lib/ui/media.svelte';
   import ContextMeter from './ContextMeter.svelte';
 
@@ -92,10 +92,39 @@
     }
   }
 
+  // ---- review pin
+  const flagged = $derived(info ? reviewed.needsReview.has(info.gwId) : false);
+
+  function toggleReviewPin() {
+    const id = info?.gwId;
+    if (!id) return;
+    if (reviewed.needsReview.has(id)) reviewed.unflag(id);
+    else reviewed.flag(id);
+  }
+
+  /** Dashboard-side marker: records done and drops the pin. Never touches the omp session file. */
+  function markDone() {
+    const id = info?.gwId;
+    if (!id) return;
+    reviewed.markDone(id); // store unflags as part of recording done
+    toast('Marked done');
+  }
+
   // ---- overflow menu
   let menuOpen = $state(false);
   let menuBtn: HTMLButtonElement | undefined = $state();
+  const reviewItem = $derived<MenuItem | null>(
+    info
+      ? {
+          id: flagged ? 'unpin' : 'review',
+          label: flagged ? 'Unpin' : 'Mark ready for review',
+          icon: flagged ? 'x' : 'flag',
+          onselect: toggleReviewPin,
+        }
+      : null,
+  );
   const items = $derived<MenuItem[]>([
+    ...(reviewItem ? [reviewItem] : []),
     { id: 'info', label: 'Session info', icon: 'info', onselect: () => openOverlay('session-info') },
     { id: 'compact', label: 'Compact', icon: 'compress', disabled: busy.compacting || active.running, onselect: compactSession },
     { id: 'stop', label: 'Stop session', icon: 'power', danger: true, onselect: stopActiveSession },
@@ -157,6 +186,12 @@
         <span class="cwd mono truncate" title={info.cwd}>{folder}</span>
       {/if}
       {#if model}<span class="chip model truncate" title={info.model?.id}>{model}</span>{/if}
+      {#if flagged && !active.running}
+        <button type="button" class="done" onclick={markDone}>
+          <Icon name="check" size={14} />
+          Mark done
+        </button>
+      {/if}
       {#if changed.files > 0}
         <button
           type="button"
@@ -283,6 +318,22 @@
     padding: 0 var(--s-2);
     box-shadow: var(--ring);
     min-height: 22px;
+  }
+  button.done {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    min-height: var(--hit);
+    padding: 0 var(--s-2);
+    border-radius: var(--r-md);
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    transition: filter var(--dur-fast) var(--ease);
+  }
+  button.done:hover {
+    filter: brightness(1.12);
   }
   button.files {
     display: inline-flex;

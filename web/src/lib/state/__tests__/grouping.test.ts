@@ -48,6 +48,42 @@ describe('groupSessions', () => {
     expect(g.running).toEqual([]);
   });
 
+  it('groups pinned sessions as Ready for review between Needs you and Running', () => {
+    const g = groupSessions(
+      [
+        live('idle1'),
+        live('run1', { isStreaming: true }),
+        live('pinned1'),
+        live('pinned2'),
+        live('need1', { pendingUi: [{ id: 'u', method: 'confirm' }] }),
+      ],
+      [],
+      NOW,
+      new Set(),
+      new Set(['pinned1', 'pinned2']),
+    );
+    expect(g.needsYou.map((s) => s.gwId)).toEqual(['need1']);
+    expect(g.review.map((s) => s.gwId)).toEqual(['pinned1', 'pinned2']);
+    expect(g.running.map((s) => s.gwId)).toEqual(['run1']);
+    expect(g.idle.map((s) => s.gwId)).toEqual(['idle1']);
+  });
+
+  it('working outranks the pin: a flagged streaming or todo-active session stays in Running', () => {
+    const g = groupSessions([live('both', { isStreaming: true })], [], NOW, new Set(), new Set(['both']));
+    expect(g.running.map((s) => s.gwId)).toEqual(['both']);
+    expect(g.review).toEqual([]);
+
+    const todo = groupSessions([live('both')], [], NOW, new Set(['both']), new Set(['both']));
+    expect(todo.running.map((s) => s.gwId)).toEqual(['both']);
+    expect(todo.review).toEqual([]);
+  });
+
+  it('pendingUi outranks the review pin', () => {
+    const g = groupSessions([live('pinned', { pendingUi: [{ id: '1', method: 'select' }] })], [], NOW, new Set(), new Set(['pinned']));
+    expect(g.needsYou.map((s) => s.gwId)).toEqual(['pinned']);
+    expect(g.review).toEqual([]);
+  });
+
   it('buckets history by local calendar day, newest first', () => {
     const at = (days: number, h = 12) => new Date(2026, 8, 29 - days, h, 0, 0);
     const g = groupSessions(
