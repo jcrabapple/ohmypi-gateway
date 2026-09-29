@@ -218,6 +218,8 @@ export interface UserMessage {
   content: string | ContentBlock[];
   attribution?: string;
   timestamp?: number;
+  /** True when this message is a steer the agent picked up mid-turn. */
+  steering?: boolean;
 }
 
 export interface AssistantMessage {

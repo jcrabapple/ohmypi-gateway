@@ -14,7 +14,7 @@ interface ItemBase {
   raw?: unknown;
 }
 
-export type UserNote = 'steer' | 'queued' | 'other-client';
+export type UserNote = 'steer' | 'steer-pending' | 'queued' | 'other-client';
 
 export interface UserItem extends ItemBase {
   kind: 'user';
@@ -23,6 +23,12 @@ export interface UserItem extends ItemBase {
   /** True from local send until the echo arrives (or the session settles). */
   pending: boolean;
   note?: UserNote;
+  /**
+   * A steer sent mid-turn that never got its echo: the turn ended without omp
+   * confirming it, so there is no way to tell consumed from dropped. Kept on
+   * the 'steer-pending' note; the badge reads "sent while streaming".
+   */
+  stale?: boolean;
   failed?: boolean;
   error?: string;
   timestamp?: number;

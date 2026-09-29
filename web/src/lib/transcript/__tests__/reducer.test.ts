@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { MessagesResponse, OmpEvent, UnknownEvent, UiRequest } from '../../api/types';
+import type { MessagesResponse, OmpEvent, OmpMessage, UnknownEvent, UiRequest } from '../../api/types';
 import { emptyTranscript, reduce, resultText, splitContent, summarize } from '../reducer';
-import type { Item, ToolItem, TranscriptInput, TranscriptState } from '../types';
+import type { Item, ToolItem, TranscriptInput, TranscriptState, UserItem } from '../types';
 import historyFixture from '../__fixtures__/messages.json';
 import turnFixture from '../__fixtures__/turn-tools-markdown.json';
 import slashFixture from '../__fixtures__/slash.json';
@@ -202,7 +202,7 @@ describe('echo dedupe and local sends', () => {
     let s = reduce(emptyTranscript(), { kind: 'local-send', localId: '1', text: 'a', mode: 'steer' });
     s = reduce(s, { kind: 'local-send', localId: '2', text: 'b', mode: 'follow_up' });
     s = reduce(s, { kind: 'local-send', localId: '3', text: 'c', mode: 'prompt', images: [{ type: 'image', data: 'x', mimeType: 'image/png' }] });
-    expect(s.items.map((i) => (i as { note?: string }).note)).toEqual(['steer', 'queued', undefined]);
+    expect(s.items.map((i) => (i as { note?: string }).note)).toEqual(['steer-pending', 'queued', undefined]);
     expect((s.items[2] as { images: number }).images).toBe(1);
   });
 
@@ -232,6 +232,128 @@ describe('echo dedupe and local sends', () => {
     s = reduce(s, { kind: 'history', messages: withEcho });
     expect(s.items.filter((i) => i.kind === 'user' && i.text === 'brand new')).toHaveLength(1);
     expect(s.items.at(-1)).toMatchObject({ pending: false });
+  });
+});
+
+describe('steer lifecycle', () => {
+  const userMsg = (text: string, timestamp: number) => ({ role: 'user', content: [{ type: 'text', text }], timestamp });
+  const steerMsg = (text: string, timestamp: number) => ({ ...userMsg(text, timestamp), steering: true });
+  const user = (s: TranscriptState, i = 0): UserItem => {
+    const it = s.items[i]!;
+    if (it.kind !== 'user') throw new Error('expected a user item');
+    return it;
+  };
+
+  it('inserts a steer-pending item whenever a steer is sent, running or not', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'turn left', mode: 'steer' });
+    expect(s.items[0]).toMatchObject({ kind: 'user', note: 'steer-pending', pending: true });
+    expect(user(s).stale).toBeUndefined();
+    const idle = reduce(emptyTranscript(), { kind: 'local-send', localId: '2', text: 'hi', mode: 'steer' });
+    expect(user(idle).note).toBe('steer-pending');
+  });
+
+  it('upgrades the pending steer to steered when the steering echo arrives', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'turn left', mode: 'steer' });
+    s = reduce(s, ev({ type: 'message_start', message: steerMsg('turn left', 50), messageId: 'm1' }));
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({ pending: false, note: 'steer', messageKey: 'user:50' });
+  });
+
+  it('marks a steer stale when the turn ends without an echo', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'turn left', mode: 'steer' });
+    s = reduce(s, ev({ type: 'agent_end' }));
+    expect(s.items[0]).toMatchObject({ pending: false, note: 'steer-pending', stale: true });
+  });
+
+  it('marks a still-pending steer stale on session_settled', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'turn left', mode: 'steer' });
+    s = reduce(s, ev({ type: 'session_settled' }));
+    expect(s.items[0]).toMatchObject({ pending: false, note: 'steer-pending', stale: true });
+  });
+
+  it('renders a steering message from another client as steered', () => {
+    const s = reduce(emptyTranscript(), ev({ type: 'message_start', message: steerMsg('from phone', 7) }));
+    expect(s.items[0]).toMatchObject({ kind: 'user', text: 'from phone', note: 'steer', pending: false });
+  });
+
+  it('clears the queued note when the next turn picks the follow-up up', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'also run tests', mode: 'follow_up' });
+    expect(user(s).note).toBe('queued');
+    s = reduce(s, ev({ type: 'message_start', message: userMsg('also run tests', 20) }));
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({ pending: false });
+    expect(user(s).note).toBeUndefined();
+  });
+
+  it('replays historical steering messages as steered', () => {
+    const messages = [steerMsg('steered once', 5), userMsg('plain later', 6)] as unknown as OmpMessage[];
+    const s = reduce(emptyTranscript(), { kind: 'history', messages });
+    expect(s.items.map((i) => (i.kind === 'user' ? i.note : undefined))).toEqual(['steer', undefined]);
+  });
+
+  it('does not swallow a plain prompt whose text matches a pending steer', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'turn left', mode: 'steer' });
+    s = reduce(s, ev({ type: 'message_start', message: userMsg('turn left', 30), messageId: 'm2' }));
+    expect(s.items).toHaveLength(2);
+    expect(s.items[0]).toMatchObject({ note: 'steer-pending', pending: true });
+    expect(s.items[1]).toMatchObject({ kind: 'user', text: 'turn left', note: 'other-client', pending: false });
+  });
+
+  it('does not let a steering echo upgrade a queued follow-up with the same text', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'run tests too', mode: 'follow_up' });
+    s = reduce(s, { kind: 'local-send', localId: '2', text: 'run tests too', mode: 'steer' });
+    s = reduce(s, ev({ type: 'message_start', message: steerMsg('run tests too', 40), messageId: 'm3' }));
+    expect(s.items).toHaveLength(2);
+    expect(s.items[0]).toMatchObject({ note: 'queued', pending: true });
+    expect(s.items[1]).toMatchObject({ kind: 'user', note: 'steer', pending: false, messageKey: 'user:40' });
+  });
+
+  it('revives a stale steer in place when its echo arrives after the turn ended', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'turn left', mode: 'steer' });
+    s = reduce(s, ev({ type: 'agent_end' }));
+    expect(s.items[0]).toMatchObject({ pending: false, stale: true });
+    s = reduce(s, ev({ type: 'message_start', message: steerMsg('turn left', 50), messageId: 'm1' }));
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({ pending: false, stale: false, note: 'steer', messageKey: 'user:50' });
+  });
+
+  it('matches two identical steers in order', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'hold', mode: 'steer' });
+    s = reduce(s, { kind: 'local-send', localId: '2', text: 'hold', mode: 'steer' });
+    s = reduce(s, ev({ type: 'message_start', message: steerMsg('hold', 60), messageId: 'm1' }));
+    s = reduce(s, ev({ type: 'message_start', message: steerMsg('hold', 61), messageId: 'm2' }));
+    expect(s.items).toHaveLength(2);
+    expect(s.items[0]).toMatchObject({ note: 'steer', pending: false, messageKey: 'user:60' });
+    expect(s.items[1]).toMatchObject({ note: 'steer', pending: false, messageKey: 'user:61' });
+  });
+
+  it('marks a pending steer item stale on agent_end too', () => {
+    const seeded: TranscriptState = {
+      ...emptyTranscript(),
+      items: [{ kind: 'user', id: 'u1', text: 'turn left', images: 0, pending: true, note: 'steer' }],
+    };
+    const s = reduce(seeded, ev({ type: 'agent_end' }));
+    expect(s.items[0]).toMatchObject({ pending: false, stale: true, note: 'steer-pending' });
+  });
+
+  it('does not re-stale a confirmed steer on a later agent_end', () => {
+    let s = reduce(emptyTranscript(), ev({ type: 'agent_start' }));
+    s = reduce(s, { kind: 'local-send', localId: '1', text: 'turn left', mode: 'steer' });
+    s = reduce(s, ev({ type: 'message_start', message: steerMsg('turn left', 50), messageId: 'm1' }));
+    s = reduce(s, ev({ type: 'agent_end' }));
+    s = reduce(s, ev({ type: 'agent_start' }));
+    s = reduce(s, ev({ type: 'agent_end' }));
+    expect(s.items[0]).toMatchObject({ pending: false, note: 'steer' });
+    expect((s.items[0] as UserItem).stale).toBeUndefined();
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modeForKey, sendPlan } from '../send';
+import { modeForKey, sendNote, sendPlan } from '../send';
 
 describe('send plan', () => {
   it('idle: Send is the only action', () => {
@@ -15,5 +15,10 @@ describe('send plan', () => {
     expect(modeForKey(true, true)).toBe('follow_up');
     expect(modeForKey(false, true)).toBe('prompt');
     expect(modeForKey(false, false)).toBe('prompt');
+  });
+  it('notes the lifecycle: steer stays pending until its echo, queued, plain', () => {
+    expect(sendNote('steer')).toBe('steer-pending');
+    expect(sendNote('follow_up')).toBe('queued');
+    expect(sendNote('prompt')).toBeUndefined();
   });
 });

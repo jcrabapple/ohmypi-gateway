@@ -6,6 +6,7 @@
 // always taken from those blocks. Deltas are never appended, which keeps replays,
 // resumes and a missed frame harmless.
 import { isBlockingUi } from '../api/types';
+import { sendNote } from '../composer/send';
 import { extractFiles } from '../render/diff2';
 import type {
   AssistantMessage, ContentBlock, CustomMessage, ModelRef, OmpEvent, OmpMessage,
@@ -52,7 +53,7 @@ export function reduce(state: TranscriptState, input: TranscriptInput): Transcri
         text: input.text,
         images: input.images?.length ?? 0,
         pending: true,
-        note: input.mode === 'steer' ? 'steer' : input.mode === 'follow_up' ? 'queued' : undefined,
+        note: sendNote(input.mode),
       };
       d.items.push(item);
       return d;
@@ -201,13 +202,43 @@ function applyUser(d: Work, m: UserMessage, ctx: Ctx, opts: { messageId?: string
   if (!b.text && !b.images) return;
   const key = keyOf(m, opts.messageId, opts.fallback);
   if (findKeyed(d, 'user', key) >= 0) return;
+  const steering = m.steering === true;
 
   if (ctx.live) {
     const text = b.text.trim();
-    const i = d.items.findIndex((it) => it.kind === 'user' && it.pending && it.text.trim() === text);
+    // Steer echoes only confirm steers; plain echoes never swallow one. Without this
+    // split, a normal prompt matching a pending steer would merge into it, and a
+    // steering echo would upgrade an unrelated queued follow-up.
+    const matches = (it: Item): it is UserItem =>
+      it.kind === 'user' && it.pending && it.text.trim() === text &&
+      (steering ? it.note === 'steer-pending' : it.note !== 'steer-pending');
+    const i = d.items.findIndex(matches);
     if (i >= 0) {
-      d.items[i] = { ...(d.items[i] as UserItem), pending: false, messageKey: key, timestamp: m.timestamp, raw: m };
+      const prev = d.items[i] as UserItem;
+      // A steering echo confirms a steer; a plain echo of a queued follow-up is the
+      // next turn picking it up, so it reads as an ordinary message from here on.
+      const note: UserItem['note'] = steering ? 'steer' : prev.note === 'queued' ? undefined : prev.note;
+      d.items[i] = { ...prev, pending: false, note, messageKey: key, timestamp: m.timestamp, raw: m };
       return;
+    }
+    if (steering) {
+      // The turn ended before this steer's echo: the stale item is still the same
+      // message, so confirm it in place instead of adding a second bubble.
+      const j = d.items.findIndex(
+        (it) => it.kind === 'user' && it.note === 'steer-pending' && it.stale === true && it.text.trim() === text,
+      );
+      if (j >= 0) {
+        d.items[j] = {
+          ...(d.items[j] as UserItem),
+          pending: false,
+          stale: false,
+          note: 'steer',
+          messageKey: key,
+          timestamp: m.timestamp,
+          raw: m,
+        };
+        return;
+      }
     }
   }
   d.items.push({
@@ -217,7 +248,7 @@ function applyUser(d: Work, m: UserMessage, ctx: Ctx, opts: { messageId?: string
     text: b.text,
     images: b.images,
     pending: false,
-    note: ctx.live ? 'other-client' : undefined,
+    note: steering ? 'steer' : ctx.live ? 'other-client' : undefined,
     timestamp: m.timestamp,
     raw: m,
   });
@@ -405,6 +436,7 @@ function fromHistory(prev: TranscriptState, messages: readonly OmpMessage[], str
     const text = it.text.trim();
     const hit = recent.find((r) => !used.has(r) && r.text.trim() === text);
     if (hit) used.add(hit);
+    else if (!streaming && it.note === 'steer-pending') d.items.push({ ...it, pending: false, stale: true });
     else d.items.push(it);
   }
   return d;
@@ -425,12 +457,27 @@ function onEvent(state: TranscriptState, event: OmpEvent | UnknownEvent, at: num
       const d = open(state);
       d.running = false;
       interrupt(d);
+      // Steers the turn ended without echoing stay visible but unconfirmed: no echo
+      // means we cannot tell consumed from dropped, so there is no "dropped" note.
+      // Pending 'steer' is defensive (sendNote emits 'steer-pending'), but catch it
+      // so a never-echoed steer can never read as confirmed.
+      for (let i = 0; i < d.items.length; i++) {
+        const it = d.items[i]!;
+        if (it.kind === 'user' && it.pending && (it.note === 'steer-pending' || it.note === 'steer')) {
+          d.items[i] = { ...it, pending: false, stale: true, note: 'steer-pending' };
+        }
+      }
       return d;
     }
     case 'session_settled': {
       if (!state.items.some((it) => it.kind === 'user' && it.pending)) return state;
       const d = open(state);
-      d.items = d.items.map((it) => (it.kind === 'user' && it.pending ? { ...it, pending: false } : it));
+      d.items = d.items.map((it) => {
+        if (it.kind !== 'user' || !it.pending) return it;
+        return it.note === 'steer-pending' || it.note === 'steer'
+          ? { ...it, pending: false, stale: true, note: 'steer-pending' }
+          : { ...it, pending: false };
+      });
       return d;
     }
     case 'prompt_result': {

@@ -1,11 +1,17 @@
 <script lang="ts">
   import type { UserItem } from '../../lib/transcript/types';
   import { Icon } from '../../lib/ui';
+  import Spinner from '../../lib/ui/Spinner.svelte';
   import MessageActions from './MessageActions.svelte';
 
   let { item }: { item: UserItem } = $props();
 
-  const NOTE: Record<string, string> = { steer: 'Steering', queued: 'Queued', 'other-client': 'From another device' };
+  const NOTE: Record<string, string> = {
+    steer: 'Steered',
+    'steer-pending': 'Sent while streaming',
+    queued: 'Queued',
+    'other-client': 'From another device',
+  };
   const note = $derived(item.note ? NOTE[item.note] : '');
 </script>
 
@@ -20,10 +26,14 @@
   </MessageActions>
   {#if item.failed}
     <p class="note err" role="status"><Icon name="alert" size={13} /> Not sent{item.error ? `: ${item.error}` : ''}</p>
+  {:else if item.pending && item.note === 'steer-pending'}
+    <p class="note"><Spinner size={11} />pending</p>
+  {:else if item.note === 'queued'}
+    <p class="note">{note}</p>
   {:else if item.pending}
     <p class="note"><span class="sr-only">Sending</span><span aria-hidden="true">Sending</span></p>
   {:else if note}
-    <p class="note">{note}</p>
+    <p class="note" class:stale={item.stale}>{note}</p>
   {/if}
 </div>
 
@@ -72,5 +82,8 @@
   }
   .note.err {
     color: var(--err);
+  }
+  .note.stale {
+    opacity: 0.7;
   }
 </style>
