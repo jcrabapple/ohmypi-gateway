@@ -1,133 +1,200 @@
-"""End-to-end test of the ohmypi-gateway against a live omp child."""
+"""Gateway e2e suite. Usage: e2e.py [BASE_URL]   (default http://127.0.0.1:9315)
+
+Covers auth (bearer, cookie login, CSRF, WS auth paths), the session
+lifecycle against a live omp child, streaming over WebSocket with cursor
+resume, and the config round trip. Leaves no sessions running.
+"""
+import asyncio
 import json
 import sys
+import threading
+import urllib.error
 import urllib.request
+from pathlib import Path
 
-BASE = "http://127.0.0.1:9315"
-TOKEN = open("/home/jason/projects/ohmypi-gateway/auth-token").read().strip()
+import websockets
 
+BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:9315").rstrip("/")
+WS_BASE = BASE.replace("https://", "wss://").replace("http://", "ws://")
+TOKEN = (Path(__file__).resolve().parent.parent / "auth-token").read_text().strip()
+UA = {"User-Agent": "ompgw-e2e/0.2"}
 
-def call(method, path, body=None, timeout=120):
-    req = urllib.request.Request(BASE + path, method=method)
-    req.add_header("Authorization", "Bearer " + TOKEN)
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode()
-        req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, data=data, timeout=timeout) as r:
-        return json.loads(r.read())
+failures: list[str] = []
 
 
-failures = []
-
-
-def check(name, cond, detail=""):
-    status = "PASS" if cond else "FAIL"
-    print(f"[{status}] {name} {detail}")
+def check(name: str, cond: bool, detail: str = "") -> None:
+    print(f"[{'PASS' if cond else 'FAIL'}] {name} {detail}".rstrip())
     if not cond:
         failures.append(name)
 
 
-# 1. system
-sysinfo = call("GET", "/api/system")
-check("system", sysinfo["omp"]["version"] not in ("", "unknown"), f"omp {sysinfo['omp']['version']}")
+def _parse(body: bytes):
+    try:
+        return json.loads(body or b"null")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
 
-# 2. spawn session
-sess = call("POST", "/api/sessions", {"cwd": "/home/jason/projects/ohmypi-gateway"})
+
+def req(method, path, body=None, token=TOKEN, headers=None, raw=None, timeout=120):
+    h = dict(UA)
+    if token:
+        h["Authorization"] = "Bearer " + token
+    h.update(headers or {})
+    data = raw
+    if body is not None:
+        data = json.dumps(body).encode()
+        h.setdefault("Content-Type", "application/json")
+    r = urllib.request.Request(BASE + path, method=method, data=data, headers=h)
+    try:
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
+            return resp.status, _parse(resp.read()), resp.headers
+    except urllib.error.HTTPError as e:
+        return e.code, _parse(e.read()), e.headers
+
+
+def ok(method, path, body=None, **kw):
+    code, data, _ = req(method, path, body, **kw)
+    if code >= 400:
+        raise RuntimeError(f"{method} {path} -> {code} {data}")
+    return data
+
+
+# ------------------------------------------------------------------ public
+
+code, data, hdrs = req("GET", "/healthz", token=None)
+check("healthz-public", code == 200 and data == {"ok": True})
+code, data, _ = req("GET", "/.well-known/ompgw.json", token=None)
+check("discovery-public", code == 200 and data.get("apiBase") == "/api", f"v{data and data.get('version')}")
+code, _, hdrs = req("GET", "/", token=None)
+csp = hdrs.get("Content-Security-Policy", "")
+check("dashboard-served+csp", code == 200 and "frame-ancestors 'none'" in csp and "'unsafe-inline' 'unsafe-eval'" not in csp)
+
+# ------------------------------------------------------------------- auth
+
+code, _, _ = req("GET", "/api/health", token=None)
+check("no-token-401", code == 401)
+code, _, _ = req("GET", "/api/health", token="wrong-" + TOKEN[:8])
+check("bad-token-401", code == 401)
+code, _, _ = req("GET", "/api/health?token=" + TOKEN, token=None)
+check("query-token-rejected", code == 401, "(tokens in URLs leak into logs)")
+code, data, _ = req("GET", "/api/me")
+check("bearer-ok", code == 200 and data["method"] == "bearer")
+
+code, _, hdrs = req("POST", "/auth/login", {"token": TOKEN}, token=None, headers={"Origin": BASE})
+setc = hdrs.get("Set-Cookie") or ""
+cookie = setc.split(";")[0]
+flags = setc.lower()
+check("cookie-login", code == 200 and cookie.startswith("ompgw_session="),
+      "flags: " + ",".join(f for f in ("httponly", "samesite=strict", "secure") if f in flags))
+code, _, _ = req("POST", "/auth/login", {"token": TOKEN}, token=None, headers={"Origin": "https://evil.example"})
+check("login-cross-origin-403", code == 403)
+code, data, _ = req("GET", "/api/me", token=None, headers={"Cookie": cookie})
+check("cookie-auth", code == 200 and data["method"] == "cookie")
+code, _, _ = req("POST", "/api/sessions", {"cwd": "/tmp"}, token=None,
+                 headers={"Cookie": cookie, "Origin": "https://evil.example"})
+check("csrf-cookie-cross-origin-403", code == 403)
+code, _, _ = req("POST", "/api/sessions", {"cwd": "/tmp"}, token=None, headers={"Cookie": cookie})
+check("csrf-cookie-no-origin-403", code == 403)
+code, _, hdrs = req("OPTIONS", "/api/health", token=None,
+                    headers={"Origin": "https://app.example", "Access-Control-Request-Method": "GET",
+                             "Access-Control-Request-Headers": "authorization"})
+check("cors-preflight", code == 200 and hdrs.get("Access-Control-Allow-Origin") == "*"
+      and not hdrs.get("Access-Control-Allow-Credentials"))
+
+# ------------------------------------------------------------ catalog/config
+
+sysinfo = ok("GET", "/api/system")
+check("system", sysinfo["omp"]["version"] not in ("", "unknown"), "omp " + sysinfo["omp"]["version"])
+skills = ok("GET", "/api/skills")["installed"]
+check("skills", len(skills) >= 10, f"{len(skills)} skills")
+cfg = ok("GET", "/api/config")
+check("config-read", isinstance(cfg.get("parsed"), dict) and "modelRoles" in cfg["parsed"])
+code, data, _ = req("PUT", "/api/config", raw=cfg["raw"].encode(), headers={"Content-Type": "text/yaml"})
+check("config-write-roundtrip", code == 200 and bool(data and data.get("ok")))
+code, _, _ = req("PUT", "/api/config", raw=b"- just\n- a list\n", headers={"Content-Type": "text/yaml"})
+check("config-rejects-non-mapping", code == 400)
+check("config-unchanged", ok("GET", "/api/config")["raw"] == cfg["raw"])
+
+# ----------------------------------------------------------------- sessions
+
+code, _, _ = req("POST", "/api/sessions", {"resumeFrom": "/etc/passwd"})
+check("resume-path-confined", code == 422)
+code, _, _ = req("POST", "/api/sessions", {"approvalMode": "sudo"})
+check("approval-validated", code == 422)
+
+sess = ok("POST", "/api/sessions", {"cwd": str(Path(__file__).resolve().parent.parent), "thinking": "off"})
 gid = sess["gwId"]
-check("spawn", not sess["exited"], f"gwId={gid} ompSession={sess['ompSessionId']}")
+check("spawn", not sess["exited"], f"gw={gid} proto=v{sess['protocolVersion']}")
 
-# 3. prompt with wait
-res = call("POST", f"/api/sessions/{gid}/prompt",
-           {"message": "Reply with exactly the single word: pong", "wait": True, "timeout": 240},
-           timeout=260)
-text = (res.get("lastAssistantText") or "").strip().lower()
-check("prompt-wait", "pong" in text, f"reply={text[:80]!r}")
-
-# 4. state
-state = call("GET", f"/api/sessions/{gid}/state")
-check("state", "model" in state and "thinkingLevel" in state,
-      f"model={state.get('model', {}).get('id') if isinstance(state.get('model'), dict) else state.get('model')} ctx={state.get('contextUsage', {}).get('percent') if state.get('contextUsage') else '?'}")
-
-# 5. messages
-msgs = call("GET", f"/api/sessions/{gid}/messages")
-check("messages", len(msgs.get("messages", [])) >= 2, f"count={msgs.get('totalMessages')}")
-
-# 6. events backlog
-evs = call("GET", f"/api/sessions/{gid}/events?after=0")
-check("events", evs["lastSeq"] > 0 and len(evs["events"]) > 0, f"lastSeq={evs['lastSeq']}")
-
-# 7. set thinking level
-r = call("POST", f"/api/sessions/{gid}/thinking", {"level": "low"})
-check("set-thinking", r["data"] is not None or r.get("ok", True))
-
-# 8. config read
-cfg = call("GET", "/api/config")
-check("config-read", "modelRoles" in json.dumps(cfg.get("parsed", {})), f"keys={sorted((cfg.get('parsed') or {}).keys())[:4]}...")
-
-# 9. config write-back (identical content, raw body)
-req = urllib.request.Request(BASE + "/api/config", method="PUT", data=cfg["raw"].encode())
-req.add_header("Authorization", "Bearer " + TOKEN)
-req.add_header("Content-Type", "text/plain")
-with urllib.request.urlopen(req, timeout=90) as r:
-    res = json.loads(r.read())
-check("config-write", res.get("ok") is True, f"backup={res.get('backup')}")
-
-# 10. skills
-skills = call("GET", "/api/skills")
-names = [s["name"] for s in skills["installed"]]
-check("skills", len(names) >= 10, f"{len(names)} skills: {names[:6]}...")
-
-# 11. saved sessions scan
-sessions = call("GET", "/api/sessions")
-check("saved-scan", len(sessions["saved"]) > 0, f"{len(sessions['saved'])} saved")
-
-# 12. websocket stream
 try:
-    import asyncio
-    import websockets
+    res = ok("POST", f"/api/sessions/{gid}/prompt",
+             {"message": "Reply with exactly the single word: pong", "wait": True, "timeout": 90}, timeout=100)
+    text = (res.get("lastAssistantText") or "")
+    check("prompt-wait", "pong" in text.lower(), repr(text[:40]))
 
-    async def ws_test():
-        uri = f"ws://127.0.0.1:9315/omp-ws/{gid}?token={TOKEN}"
-        async with websockets.connect(uri, max_size=None) as ws:
-            # backlog arrives first
-            got = []
-            # then trigger a turn and watch live events
-            import threading
+    st = ok("GET", f"/api/sessions/{gid}/state")
+    check("state-trimmed", "model" in st and "systemPrompt" not in st and "dumpTools" not in st)
+    check("messages", len(ok("GET", f"/api/sessions/{gid}/messages")["messages"]) >= 2)
+    check("session-stats", ok("GET", f"/api/sessions/{gid}/stats")["data"] is not None)
+    check("set-thinking", ok("POST", f"/api/sessions/{gid}/thinking", {"level": "low"}) is not None)
+    ok("POST", f"/api/sessions/{gid}/name", {"name": "e2e probe"})
+    check("rename", ok("GET", f"/api/sessions/{gid}")["ompSessionName"] == "e2e probe")
+    raw = ok("POST", f"/api/sessions/{gid}/rpc", {"type": "get_last_assistant_text"})
+    check("raw-rpc-passthrough", raw["data"] is not None)
+    cursor = ok("GET", f"/api/sessions/{gid}/events")["lastSeq"]
 
-            def fire():
-                call("POST", f"/api/sessions/{gid}/prompt",
-                     {"message": "Reply with exactly: beep", "wait": True, "timeout": 240}, timeout=260)
-            t = threading.Thread(target=fire, daemon=True)
-            t.start()
-            # Wait for TWO agent_end frames (one replayed from the prior turn's
-            # backlog, one from the live turn) so we don't bail early.
-            ends = 0
+    async def ws_stream():
+        uri = f"{WS_BASE}/omp-ws/{gid}?after={cursor}"
+        async with websockets.connect(uri, additional_headers={"Authorization": "Bearer " + TOKEN, **UA},
+                                      max_size=None, open_timeout=20) as ws:
+            first = json.loads(await asyncio.wait_for(ws.recv(), 20))
+            assert first["event"]["type"] == "auth_ok", first
+            threading.Thread(target=lambda: req("POST", f"/api/sessions/{gid}/prompt",
+                                                {"message": "Reply with exactly: beep", "mode": "prompt"}),
+                             daemon=True).start()
+            types, seqs = [], []
+            while "agent_end" not in types:
+                f = json.loads(await asyncio.wait_for(ws.recv(), 120))
+                if f["seq"] > 0:
+                    seqs.append(f["seq"])
+                types.append(f["event"]["type"])
+            await ws.send(json.dumps({"id": "c1", "type": "get_state"}))
+            while True:
+                f = json.loads(await asyncio.wait_for(ws.recv(), 30))
+                if f["event"]["type"] == "rpc_response" and f["event"]["id"] == "c1":
+                    return types, seqs, f["event"]
+    types, seqs, rpc = asyncio.run(ws_stream())
+    check("ws-header-auth+stream", "agent_start" in types and types.count("message_update") > 0,
+          f"{len(types)} frames")
+    check("ws-resume-cursor", bool(seqs) and min(seqs) > cursor and seqs == sorted(set(seqs)),
+          "no replayed or duplicate frames")
+    check("ws-rpc-in-socket", rpc["success"] and "model" in rpc["data"])
+
+    async def ws_first_message(token):
+        async with websockets.connect(f"{WS_BASE}/omp-ws/{gid}", additional_headers=UA, open_timeout=20) as ws:
+            await ws.send(json.dumps({"type": "auth", "token": token}))
             try:
-                while ends < 2 and len(got) < 200:
-                    frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=240))
-                    got.append(frame["event"])
-                    if frame["event"].get("type") == "agent_end":
-                        ends += 1
-            except asyncio.TimeoutError:
-                pass
-            types = [e.get("type") for e in got]
-            return types, ends
-    types, ends = asyncio.run(ws_test())
-    check("ws-stream", ends >= 2 and "message_update" in types,
-          f"live agent_end={ends}, message_updates={types.count('message_update')}")
-except ImportError as e:
-    print("[SKIP] ws-stream (websockets missing):", e)
-except Exception as e:
-    print("[FAIL] ws-stream:", e)
-    failures.append("ws-stream")
+                return json.loads(await asyncio.wait_for(ws.recv(), 15))["event"]["type"]
+            except websockets.ConnectionClosed as e:
+                return f"closed:{e.rcvd.code if e.rcvd else '?'}"
+    check("ws-first-message-auth", asyncio.run(ws_first_message(TOKEN)) == "auth_ok")
+    check("ws-bad-token-4401", asyncio.run(ws_first_message("nope")) == "closed:4401")
 
-# 13. stop session
-r = call("DELETE", f"/api/sessions/{gid}")
-after = call("GET", "/api/sessions")
-still = [s for s in after["live"] if s["gwId"] == gid]
-check("stop-session", len(still) == 0, "reaped")
+    async def ws_cookie(origin_hdr):
+        h = {"Cookie": cookie, **UA}
+        if origin_hdr:
+            h["Origin"] = origin_hdr
+        async with websockets.connect(f"{WS_BASE}/omp-ws/{gid}", additional_headers=h, open_timeout=20) as ws:
+            try:
+                return json.loads(await asyncio.wait_for(ws.recv(), 15))["event"]["type"]
+            except (websockets.ConnectionClosed, asyncio.TimeoutError):
+                return "denied"
+    check("ws-cookie-same-origin", asyncio.run(ws_cookie(BASE)) == "auth_ok")
+    check("ws-cookie-cross-origin-denied", asyncio.run(ws_cookie("https://evil.example")) == "denied")
+finally:
+    ok("DELETE", f"/api/sessions/{gid}")
 
-print()
-print("FAILURES:", failures if failures else "none — all green")
+check("stop-reaped", all(s["gwId"] != gid for s in ok("GET", "/api/sessions?include_saved=false")["live"]))
+
+print(f"\n{BASE}: " + ("all green" if not failures else f"FAILURES: {failures}"))
 sys.exit(1 if failures else 0)

@@ -76,8 +76,10 @@ class OmpSession:
         self._stdin_lock = asyncio.Lock()
 
         self.subscribers: set[asyncio.Queue] = set()
-        self.backlog: deque[tuple[int, dict]] = collections.deque(maxlen=3000)
+        self.backlog: collections.deque[tuple[int, dict]] = collections.deque(maxlen=3000)
         self._backlog_seq = 0
+        self.last_activity = time.time()
+        self.streaming = False
 
         # Session metadata, filled from events / get_state.
         self.omp_session_file: str | None = session_file
@@ -88,6 +90,7 @@ class OmpSession:
         self.last_state: dict | None = None
 
         self._turn_waiters: list[asyncio.Future] = []
+        self._negotiation: asyncio.Task | None = None
 
         self.proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
@@ -98,7 +101,7 @@ class OmpSession:
     async def _negotiate_v2(self) -> None:
         try:
             data = await self.command("negotiate_protocol", protocolVersion=2, timeout=15)
-            if data.get("protocolVersion") == 2 or data is not None:
+            if isinstance(data, dict) and data.get("protocolVersion") == 2:
                 self.protocol_version = 2
         except (RpcError, ProcessDead):
             log.warning("[%s] v2 negotiation failed, staying on v1", self.gw_id)
@@ -130,6 +133,9 @@ class OmpSession:
         except asyncio.TimeoutError:
             await self.stop()
             raise RpcError("start", f"omp did not signal ready within {startup_timeout}s")
+        if self._negotiation is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._negotiation, 20)
 
     # ------------------------------------------------------------------ reads
 
@@ -171,8 +177,9 @@ class OmpSession:
                 self.ready.set_result(True)
             if 2 in supported:
                 # Never await commands inline in the reader loop: the response
-                # can only be read by this same loop. Schedule instead.
-                asyncio.get_running_loop().create_task(self._negotiate_v2())
+                # can only be read by this same loop. Schedule instead; start()
+                # awaits the task so callers see the final protocol version.
+                self._negotiation = asyncio.get_running_loop().create_task(self._negotiate_v2())
             return
 
         if ftype == "response":
@@ -200,7 +207,10 @@ class OmpSession:
             self.omp_session_file = info.get("sessionFile") or self.omp_session_file
             self.omp_session_id = info.get("sessionId") or self.omp_session_id
             self.omp_session_name = info.get("name") or info.get("sessionName") or self.omp_session_name
+        elif ftype == "agent_start":
+            self.streaming = True
         elif ftype == "agent_end":
+            self.streaming = False
             for w in list(self._turn_waiters):
                 if not w.done():
                     w.set_result(True)
@@ -237,12 +247,16 @@ class OmpSession:
             return None
 
     async def _publish(self, event: dict) -> None:
+        self.last_activity = time.time()
         self._backlog_seq += 1
         item = (self._backlog_seq, event)
         self.backlog.append(item)
         for q in list(self.subscribers):
-            with contextlib.suppress(asyncio.QueueFull):
+            try:
                 q.put_nowait(item)
+            except asyncio.QueueFull:
+                # Slow consumer: drop it; the client reconnects with ?after=seq.
+                self.subscribers.discard(q)
 
     # ----------------------------------------------------------------- writes
 
@@ -337,6 +351,17 @@ class OmpSession:
             return data.get("text") or data.get("assistantText")
         return data if isinstance(data, str) else None
 
+    @property
+    def last_seq(self) -> int:
+        return self._backlog_seq
+
+    def touch(self) -> None:
+        self.last_activity = time.time()
+
+    def is_busy(self) -> bool:
+        st = self.last_state or {}
+        return self.streaming or bool(st.get("isCompacting"))
+
     def subscribe(self, after_seq: int = 0) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=5000)
         self.subscribers.add(q)
@@ -410,7 +435,8 @@ class OmpSession:
             "ompSessionName": self.omp_session_name,
             "model": self.model or self.requested_model,
             "thinkingLevel": self.thinking_level or self.requested_thinking,
-            "isStreaming": st.get("isStreaming", self.exited is False and bool(self._turn_waiters) is False and False),
+            "isStreaming": self.streaming,
+            "idleSec": round(time.time() - self.last_activity, 1),
             "exited": self.exited,
             "exitCode": self.exit_code,
             "protocolVersion": self.protocol_version,

@@ -1,25 +1,36 @@
 """ohmypi-gateway: HTTP/WebSocket gateway over the omp (oh-my-pi) RPC protocol.
 
-Auth: bearer token, generated on first run at <project>/auth-token.
-Everything under /api requires it; the dashboard page is served open and
-prompts for the token in the browser.
+Designed to sit behind a Cloudflare tunnel. See gateway/auth.py for the auth
+model and docs/API.md for the client contract.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
-import secrets
+import re
 import subprocess
 import time
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .auth import (
+    COOKIE_NAME,
+    COOKIE_TTL,
+    FailureLimiter,
+    TokenStore,
+    bearer,
+    client_ip,
+    forwarded_https,
+    origin_allowed,
+)
 from .bridge import (
     DEFAULT_APPROVAL_MODE,
     OMP_AGENT_DIR,
@@ -30,40 +41,108 @@ from .bridge import (
     scan_saved_sessions,
 )
 
+VERSION = "0.2.0"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-TOKEN_FILE = PROJECT_DIR / "auth-token"
 STATIC_DIR = PROJECT_DIR / "static"
 CONFIG_FILE = OMP_AGENT_DIR / "config.yml"
 STARTED_AT = time.time()
 
-app = FastAPI(title="ohmypi-gateway", version="0.1.0", docs_url="/api/docs")
+MAX_SESSIONS = int(os.environ.get("OMPGW_MAX_SESSIONS", "8"))
+IDLE_REAP_SEC = int(os.environ.get("OMPGW_IDLE_REAP_SEC", str(6 * 3600)))
+WS_HEARTBEAT_SEC = 25          # Cloudflare drops idle websockets at ~100s
+WS_AUTH_TIMEOUT_SEC = 10
+# Extra browser origins allowed to use cookie auth (comma-separated).
+EXTRA_ORIGINS = {o.strip() for o in os.environ.get("OMPGW_EXTRA_ORIGINS", "").split(",") if o.strip()}
+THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "auto")
+APPROVAL_MODES = ("always-ask", "write", "yolo")
+
+tokens = TokenStore(PROJECT_DIR / "auth-token")
+limiter = FailureLimiter()
+
+app = FastAPI(title="ohmypi-gateway", version=VERSION,
+              docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
+
+# Bearer-token clients (desktop, mobile, other web origins) may call from any
+# origin. Credentials are NOT allowed cross-origin, so the session cookie is
+# never usable from a foreign page; foreign pages must hold the token.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
+    max_age=600,
+)
+
+PUBLIC_PATHS = {"/", "/healthz", "/auth/login", "/auth/logout", "/.well-known/ompgw.json",
+                "/manifest.webmanifest"}
+UNSAFE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    # Alpine's standard build compiles expressions with Function(), hence
+    # unsafe-eval. No inline scripts: app logic lives in /static/app.js.
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    ),
+}
 
 
-def auth_token() -> str:
-    if not TOKEN_FILE.exists():
-        TOKEN_FILE.write_text(secrets.token_urlsafe(32) + "\n")
-        os.chmod(TOKEN_FILE, 0o600)
-    return TOKEN_FILE.read_text().strip()
+def _peer(request_or_ws) -> str | None:
+    return request_or_ws.client.host if request_or_ws.client else None
 
 
-TOKEN = auth_token()
+def authenticate(headers, cookies, peer: str | None) -> str | None:
+    """Return 'bearer' / 'cookie' / None."""
+    if tokens.check(bearer(headers)):
+        return "bearer"
+    if tokens.check_cookie(cookies.get(COOKIE_NAME)):
+        return "cookie"
+    return None
 
 
 @app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    if request.url.path.startswith("/api") or request.url.path.startswith("/omp-ws"):
-        supplied = (request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-                    or request.headers.get("x-api-key", "").strip()
-                    or request.query_params.get("token", "").strip())
-        if supplied != TOKEN:
+async def gate(request: Request, call_next):
+    path = request.url.path
+    ip = client_ip(request.headers, _peer(request))
+    needs_auth = not (path in PUBLIC_PATHS or path.startswith("/static/")) \
+        and request.method != "OPTIONS"
+
+    if needs_auth:
+        wait = limiter.locked(ip)
+        if wait:
+            return JSONResponse({"error": "too many failed attempts", "retryAfterSec": int(wait)},
+                                status_code=429, headers={"Retry-After": str(int(wait))})
+        how = authenticate(request.headers, request.cookies, _peer(request))
+        if how is None:
+            # Only a presented-and-wrong credential counts toward lockout; a
+            # signed-out browser probing /api/me is not an attack.
+            if bearer(request.headers) or request.cookies.get(COOKIE_NAME):
+                limiter.fail(ip)
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return await call_next(request)
+        # CSRF: cookie-authenticated state changes must come from our own origin.
+        if how == "cookie" and request.method in UNSAFE_METHODS:
+            if not origin_allowed(request.headers.get("origin"), request.headers.get("host"),
+                                  EXTRA_ORIGINS):
+                return JSONResponse({"error": "cross-origin request refused"}, status_code=403)
+        request.state.auth = how
+
+    response = await call_next(request)
+    for k, v in SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
+    if path == "/" or path.startswith("/static/"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
 
 
 def cli(*args: str, timeout: float = 60) -> str:
     """Run an omp CLI subcommand and return stdout text."""
     env = dict(os.environ)
-    env.setdefault("PATH", os.path.expanduser("~/.bun/bin:") + env.get("PATH", ""))
+    env["PATH"] = os.path.expanduser("~/.bun/bin:") + env.get("PATH", "")
     try:
         r = subprocess.run([OMP_BIN, *args], capture_output=True, text=True,
                            timeout=timeout, env=env)
@@ -74,6 +153,11 @@ def cli(*args: str, timeout: float = 60) -> str:
     return r.stdout
 
 
+async def acli(*args: str, timeout: float = 60) -> str:
+    """cli() off the event loop, so slow subcommands don't stall live streams."""
+    return await asyncio.to_thread(cli, *args, timeout=timeout)
+
+
 def get_session_or_404(gw_id: str):
     try:
         return get_manager().get(gw_id)
@@ -81,9 +165,19 @@ def get_session_or_404(gw_id: str):
         raise HTTPException(404, f"no live session {gw_id}")
 
 
+async def json_body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(400, "body must be JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be a JSON object")
+    return body
+
+
 @app.exception_handler(RpcError)
 async def rpc_error_handler(request: Request, exc: RpcError):
-    return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"error": str(exc), "code": exc.code}, status_code=400)
 
 
 @app.exception_handler(ProcessDead)
@@ -91,27 +185,87 @@ async def process_dead_handler(request: Request, exc: ProcessDead):
     return JSONResponse({"error": str(exc)}, status_code=409)
 
 
+@app.exception_handler(HTTPException)
+async def http_error_handler(request: Request, exc: HTTPException):
+    return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+
+# ----------------------------------------------------------------------- auth
+
+@app.post("/auth/login")
+async def login(request: Request):
+    ip = client_ip(request.headers, _peer(request))
+    wait = limiter.locked(ip)
+    if wait:
+        return JSONResponse({"error": "too many failed attempts", "retryAfterSec": int(wait)},
+                            status_code=429, headers={"Retry-After": str(int(wait))})
+    if not origin_allowed(request.headers.get("origin"), request.headers.get("host"), EXTRA_ORIGINS):
+        return JSONResponse({"error": "cross-origin login refused"}, status_code=403)
+    body = await json_body(request)
+    if not tokens.check(body.get("token")):
+        limiter.fail(ip)
+        return JSONResponse({"error": "invalid token"}, status_code=401)
+    limiter.succeed(ip)
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(COOKIE_NAME, tokens.mint_cookie(), max_age=COOKIE_TTL, httponly=True,
+                     secure=forwarded_https(request.headers, _peer(request)) or
+                     request.url.scheme == "https",
+                     samesite="strict", path="/")
+    return resp
+
+
+@app.post("/auth/logout")
+async def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(COOKIE_NAME, path="/")
+    return resp
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    return {"authenticated": True, "method": getattr(request.state, "auth", None)}
+
+
 # --------------------------------------------------------------------- system
+
+@app.get("/healthz")
+async def healthz():
+    """Unauthenticated liveness probe. Deliberately says nothing else."""
+    return {"ok": True}
+
+
+@app.get("/.well-known/ompgw.json")
+async def discovery():
+    """Unauthenticated client bootstrap: what this server speaks, not what it holds."""
+    return {
+        "name": "ohmypi-gateway",
+        "version": VERSION,
+        "apiBase": "/api",
+        "websocket": "/omp-ws/{sessionId}",
+        "auth": {"bearer": True, "cookieLogin": "/auth/login",
+                 "wsFirstMessage": {"type": "auth", "token": "<token>"}},
+        "openapi": "/api/openapi.json",
+    }
+
 
 @app.get("/api/health")
 async def health():
     m = get_manager()
-    return {"ok": True, "version": app.version, "uptimeSec": round(time.time() - STARTED_AT, 1),
-            "liveSessions": len(m.sessions)}
+    return {"ok": True, "version": VERSION, "uptimeSec": round(time.time() - STARTED_AT, 1),
+            "liveSessions": len(m.sessions), "maxSessions": MAX_SESSIONS}
 
 
 @app.get("/api/system")
 async def system():
     m = get_manager()
     omp_version = "unknown"
-    try:
-        omp_version = cli("--version", timeout=15).strip().removeprefix("omp v").removeprefix("omp")
-    except HTTPException:
-        pass
+    with contextlib.suppress(HTTPException):
+        m_ = re.search(r"(\d+\.\d+\.\d+\S*)", await acli("--version", timeout=15))
+        omp_version = m_.group(1) if m_ else "unknown"
     return {
-        "gateway": {"version": app.version, "uptimeSec": round(time.time() - STARTED_AT, 1),
-                    "projectDir": str(PROJECT_DIR)},
-        "omp": {"binary": OMP_BIN, "version": omp_version, "agentDir": str(OMP_AGENT_DIR),
+        "gateway": {"version": VERSION, "uptimeSec": round(time.time() - STARTED_AT, 1),
+                    "maxSessions": MAX_SESSIONS, "idleReapSec": IDLE_REAP_SEC},
+        "omp": {"version": omp_version, "agentDir": str(OMP_AGENT_DIR),
                 "configFile": str(CONFIG_FILE)},
         "liveSessions": len(m.sessions),
     }
@@ -119,49 +273,52 @@ async def system():
 
 # --------------------------------------------------------------------- config
 
+_config_lock = asyncio.Lock()
+
+
 @app.get("/api/config")
 async def get_config():
     if not CONFIG_FILE.exists():
-        raise HTTPException(404, f"{CONFIG_FILE} not found")
+        raise HTTPException(404, "config.yml not found")
     raw = CONFIG_FILE.read_text()
-    parsed = None
     try:
         parsed = yaml.safe_load(raw)
     except yaml.YAMLError as e:
-        return {"raw": raw, "parseError": str(e)}
+        return {"raw": raw, "parsed": None, "parseError": str(e)}
     return {"raw": raw, "parsed": parsed, "file": str(CONFIG_FILE)}
 
 
 @app.put("/api/config")
 async def put_config(request: Request):
-    body = await request.body()
-    text = body.decode("utf-8")
+    text = (await request.body()).decode("utf-8", "replace")
+    if len(text) > 256 * 1024:
+        raise HTTPException(413, "config too large")
     try:
         parsed = yaml.safe_load(text)
     except yaml.YAMLError as e:
         raise HTTPException(400, f"invalid YAML: {e}")
-    backup = CONFIG_FILE.with_suffix(".yml.bak-gateway")
-    backup.write_text(CONFIG_FILE.read_text())
-    CONFIG_FILE.write_text(text)
-    # Validate the new config actually loads.
-    try:
-        cli("config", "get", "modelRoles", timeout=30)
-    except HTTPException as e:
-        CONFIG_FILE.write_text(backup.read_text())
-        raise HTTPException(400, f"omp rejected the config, reverted: {e.detail}")
-    return {"ok": True, "backup": str(backup), "keys": sorted((parsed or {}).keys())}
+    if parsed is not None and not isinstance(parsed, dict):
+        raise HTTPException(400, "config must be a YAML mapping")
+    async with _config_lock:
+        backup = CONFIG_FILE.with_name("config.yml.bak-gateway")
+        backup.write_text(CONFIG_FILE.read_text())
+        CONFIG_FILE.write_text(text)
+        try:
+            await acli("config", "get", "modelRoles", timeout=30)
+        except HTTPException as e:
+            CONFIG_FILE.write_text(backup.read_text())
+            raise HTTPException(400, f"omp rejected the config, reverted: {e.detail}")
+    return {"ok": True, "keys": sorted((parsed or {}).keys()),
+            "note": "running sessions keep their old settings until restarted"}
 
 
-# --------------------------------------------------------------------- models
+# --------------------------------------------------------------- catalog / cli
 
 @app.get("/api/models")
 async def models(q: str | None = None):
     args = ["models"] + ([q] if q else [])
-    out = cli(*args, timeout=90)
-    return {"raw": out[-20000:]}
+    return {"raw": (await acli(*args, timeout=90))[-40000:]}
 
-
-# ------------------------------------------------------------------ skills etc
 
 @app.get("/api/skills")
 async def skills():
@@ -173,42 +330,47 @@ async def skills():
                 continue
             for cand in (p / "SKILL.md", p / "skill.md"):
                 if cand.exists():
-                    desc = ""
-                    in_front = False
-                    for line in cand.read_text(errors="replace").splitlines()[:20]:
+                    desc, in_front = "", False
+                    for line in cand.read_text(errors="replace").splitlines()[:30]:
                         if line.strip() == "---":
-                            in_front = not in_front
+                            if in_front:
+                                break
+                            in_front = True
                             continue
                         if in_front and line.lower().startswith("description:"):
-                            desc = line.split(":", 1)[1].strip()
+                            desc = line.split(":", 1)[1].strip().strip("\"'>")
                             break
-                    installed.append({"name": p.name, "path": str(p), "description": desc})
+                    installed.append({"name": p.name, "description": desc,
+                                      "symlink": p.is_symlink()})
                     break
-    return {"installed": installed, "dir": str(skills_dir)}
+    return {"installed": installed}
+
+
+async def _cli_text(*args: str, timeout: float = 60) -> dict:
+    try:
+        return {"raw": (await acli(*args, timeout=timeout))[-40000:]}
+    except HTTPException as e:
+        return {"raw": "", "error": e.detail}
 
 
 @app.get("/api/plugins")
 async def plugins():
-    try:
-        return {"raw": cli("plugin", "list", timeout=60)[-20000:]}
-    except HTTPException as e:
-        return {"raw": "", "error": e.detail}
+    return await _cli_text("plugin", "list", timeout=60)
 
 
 @app.get("/api/usage")
 async def usage():
-    try:
-        return {"raw": cli("usage", timeout=90)[-20000:]}
-    except HTTPException as e:
-        return {"raw": "", "error": e.detail}
+    return await _cli_text("usage", timeout=90)
 
 
 @app.get("/api/agents")
 async def agents():
-    try:
-        return {"raw": cli("agents", timeout=30)[-20000:]}
-    except HTTPException as e:
-        return {"raw": "", "error": e.detail}
+    return await _cli_text("agents", timeout=30)
+
+
+@app.get("/api/stats")
+async def stats():
+    return await _cli_text("stats", timeout=60)
 
 
 # ------------------------------------------------------------------- sessions
@@ -217,35 +379,40 @@ async def agents():
 async def list_sessions(include_saved: bool = True, limit: int = 100):
     await get_manager().reap_dead()
     live = get_manager().list_live()
-    saved = scan_saved_sessions(limit=limit) if include_saved else []
+    saved = scan_saved_sessions(limit=min(limit, 500)) if include_saved else []
     return {"live": live, "saved": saved}
 
 
 @app.post("/api/sessions")
 async def create_session(request: Request):
-    body = await request.json()
-    cwd = body.get("cwd") or os.getcwd()
-    model = body.get("model")
-    thinking = body.get("thinking")
+    body = await json_body(request)
+    await get_manager().reap_dead()
+    if len(get_manager().sessions) >= MAX_SESSIONS:
+        raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
     approval_mode = body.get("approvalMode", DEFAULT_APPROVAL_MODE)
-    if approval_mode not in ("always-ask", "write", "yolo"):
+    if approval_mode not in APPROVAL_MODES:
         raise HTTPException(422, "approvalMode must be always-ask|write|yolo")
-    if thinking and thinking not in ("off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"):
+    thinking = body.get("thinking")
+    if thinking and thinking not in THINKING_LEVELS:
         raise HTTPException(422, "invalid thinking level")
-    sess = await get_manager().create(cwd=cwd, model=model, thinking=thinking,
-                                      approval_mode=approval_mode,
-                                      session_file=body.get("resumeFrom"))
+    resume = body.get("resumeFrom")
+    if resume:
+        rp = Path(resume).expanduser().resolve()
+        if not rp.is_file() or (OMP_AGENT_DIR / "sessions").resolve() not in rp.parents:
+            raise HTTPException(422, "resumeFrom must be a saved session file from /api/sessions")
+        resume = str(rp)
+    cwd = body.get("cwd") or os.path.expanduser("~/projects")
+    sess = await get_manager().create(cwd=cwd, model=body.get("model") or None,
+                                      thinking=thinking or None, approval_mode=approval_mode,
+                                      session_file=resume)
     return sess.info()
 
 
 @app.get("/api/sessions/{gw_id}")
 async def session_info(gw_id: str):
     sess = get_session_or_404(gw_id)
-    with_timeout = None
-    try:
+    with contextlib.suppress(RpcError, ProcessDead):
         await sess.get_state()
-    except (RpcError, ProcessDead):
-        pass
     return sess.info()
 
 
@@ -257,15 +424,23 @@ async def stop_session(gw_id: str):
 
 @app.post("/api/sessions/{gw_id}/prompt")
 async def prompt(gw_id: str, request: Request):
+    """wait:true blocks until the turn ends. Behind Cloudflare a response must
+    start within 100s, so remote clients should use wait:false + the stream."""
     sess = get_session_or_404(gw_id)
-    body = await request.json()
+    body = await json_body(request)
     message = body.get("message")
-    if not message:
+    if not isinstance(message, str) or not message.strip():
         raise HTTPException(422, "message required")
+    mode = body.get("mode") or ("steer" if body.get("steer") else "prompt")
+    if mode not in ("prompt", "steer", "follow_up"):
+        raise HTTPException(422, "mode must be prompt|steer|follow_up")
     wait = bool(body.get("wait"))
-    steer = bool(body.get("steer"))
-    data = await sess.prompt(message, wait=wait, steer=steer,
-                             timeout=float(body.get("timeout", 600)))
+    sess.touch()
+    if mode == "follow_up":
+        data = await sess.command("follow_up", message=message, timeout=30)
+    else:
+        data = await sess.prompt(message, wait=wait, steer=(mode == "steer"),
+                                 timeout=float(body.get("timeout", 600)))
     out = sess.info()
     out["ack"] = data
     if wait:
@@ -279,17 +454,19 @@ async def abort(gw_id: str):
 
 
 @app.post("/api/sessions/{gw_id}/compact")
-async def compact(gw_id: str, request: Request = None):
-    body = await request.json() if request else {}
-    kw = {}
-    if body.get("instructions"):
-        kw["customInstructions"] = body["instructions"]
+async def compact(gw_id: str, request: Request):
+    body = await json_body(request) if (await request.body()) else {}
+    kw = {"customInstructions": body["instructions"]} if body.get("instructions") else {}
     return {"data": await get_session_or_404(gw_id).command("compact", timeout=300, **kw)}
 
 
 @app.get("/api/sessions/{gw_id}/state")
 async def state(gw_id: str):
-    return await get_session_or_404(gw_id).get_state()
+    st = await get_session_or_404(gw_id).get_state()
+    # systemPrompt + tool dumps are large and rarely wanted by clients.
+    if isinstance(st, dict):
+        st = {k: v for k, v in st.items() if k not in ("systemPrompt", "dumpTools")}
+    return st
 
 
 @app.get("/api/sessions/{gw_id}/messages")
@@ -299,7 +476,7 @@ async def messages(gw_id: str):
 
 @app.post("/api/sessions/{gw_id}/model")
 async def set_model(gw_id: str, request: Request):
-    body = await request.json()
+    body = await json_body(request)
     provider, model_id = body.get("provider"), body.get("modelId")
     if not provider or not model_id:
         raise HTTPException(422, "provider and modelId required")
@@ -309,12 +486,23 @@ async def set_model(gw_id: str, request: Request):
 
 @app.post("/api/sessions/{gw_id}/thinking")
 async def set_thinking(gw_id: str, request: Request):
-    body = await request.json()
-    level = body.get("level")
-    if level not in ("off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"):
+    body = await json_body(request)
+    if body.get("level") not in THINKING_LEVELS:
         raise HTTPException(422, "invalid thinking level")
     return {"data": await get_session_or_404(gw_id).command(
-        "set_thinking_level", level=level, timeout=15)}
+        "set_thinking_level", level=body["level"], timeout=15)}
+
+
+@app.post("/api/sessions/{gw_id}/name")
+async def set_name(gw_id: str, request: Request):
+    body = await json_body(request)
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(422, "name required")
+    sess = get_session_or_404(gw_id)
+    data = await sess.command("set_session_name", name=name[:200], timeout=15)
+    sess.omp_session_name = name[:200]
+    return {"data": data}
 
 
 @app.get("/api/sessions/{gw_id}/models")
@@ -322,61 +510,177 @@ async def available_models(gw_id: str):
     return {"data": await get_session_or_404(gw_id).command("get_available_models", timeout=60)}
 
 
+@app.get("/api/sessions/{gw_id}/commands")
+async def available_commands(gw_id: str):
+    return {"data": await get_session_or_404(gw_id).command("get_available_commands", timeout=30)}
+
+
+@app.get("/api/sessions/{gw_id}/stats")
+async def session_stats(gw_id: str):
+    return {"data": await get_session_or_404(gw_id).command("get_session_stats", timeout=30)}
+
+
+@app.post("/api/sessions/{gw_id}/rpc")
+async def raw_rpc(gw_id: str, request: Request):
+    """Escape hatch: any RpcCommand from docs/rpc.md, correlated and returned.
+    Keeps clients at full protocol coverage without a gateway release."""
+    body = await json_body(request)
+    ctype = body.pop("type", None)
+    if not isinstance(ctype, str) or not ctype:
+        raise HTTPException(422, "type required")
+    body.pop("id", None)
+    timeout = float(body.pop("timeout", 60))
+    return {"data": await get_session_or_404(gw_id).command(ctype, timeout=min(timeout, 300), **body)}
+
+
 @app.get("/api/sessions/{gw_id}/events")
 async def events(gw_id: str, after: int = 0):
     sess = get_session_or_404(gw_id)
-    items = sess.backlog_since(after)
-    return {"events": [{"seq": s, "event": e} for s, e in items], "lastSeq": sess._backlog_seq}
+    return {"events": [{"seq": s, "event": e} for s, e in sess.backlog_since(after)],
+            "lastSeq": sess.last_seq}
 
 
 # ----------------------------------------------------------------- websocket
 
 @app.websocket("/omp-ws/{gw_id}")
-async def ws_session(ws: WebSocket, gw_id: str, token: str = Query("")):
-    if token != TOKEN:
-        await ws.close(code=4401)
+async def ws_session(ws: WebSocket, gw_id: str, after: int = 0):
+    """Live event stream for one session.
+
+    Auth, first match wins: Authorization header (native clients), session
+    cookie with a same-origin Origin (dashboard), or a first message
+    {"type":"auth","token":"..."} within 10s (browsers on other origins).
+
+    Server frames: {"seq": n, "event": {...}}; seq=0 frames are gateway
+    control messages (auth_ok, heartbeat, ws_error, rpc_response).
+    Client frames: {"type":"auth",...}, "ping", or any raw RpcCommand /
+    extension_ui_response object, forwarded to omp.
+    """
+    ip = client_ip(ws.headers, _peer(ws))
+    if limiter.locked(ip):
+        await ws.close(code=4429)
         return
+
+    authed = tokens.check(bearer(ws.headers))
+    if not authed and tokens.check_cookie(ws.cookies.get(COOKIE_NAME)):
+        authed = origin_allowed(ws.headers.get("origin"), ws.headers.get("host"), EXTRA_ORIGINS)
+
+    await ws.accept()
+    if not authed:
+        try:
+            first = await asyncio.wait_for(ws.receive_text(), WS_AUTH_TIMEOUT_SEC)
+            msg = json.loads(first)
+            authed = msg.get("type") == "auth" and tokens.check(msg.get("token"))
+        except (asyncio.TimeoutError, json.JSONDecodeError, AttributeError, WebSocketDisconnect):
+            authed = False
+        if not authed:
+            limiter.fail(ip)
+            with contextlib.suppress(Exception):
+                await ws.close(code=4401)
+            return
+    limiter.succeed(ip)
+
     try:
         sess = get_manager().get(gw_id)
     except KeyError:
         await ws.close(code=4404)
         return
-    await ws.accept()
+
     q = sess.subscribe()
-    last_sent = 0
-    try:
-        # backlog first
-        for seq, event in sess.backlog_since(0):
-            await ws.send_json({"seq": seq, "event": event})
+    last_sent = max(0, after)
+    sender_lock = asyncio.Lock()
+
+    async def send(obj: dict) -> None:
+        async with sender_lock:
+            await ws.send_json(obj)
+
+    async def pump_out() -> None:
+        nonlocal last_sent
+        await send({"seq": 0, "event": {"type": "auth_ok", "session": sess.info()}})
+        for seq, event in sess.backlog_since(last_sent):
+            await send({"seq": seq, "event": event})
             last_sent = seq
         while True:
-            recv = asyncio.create_task(ws.receive_text())
-            pub = asyncio.create_task(q.get())
-            done, pending = await asyncio.wait({recv, pub}, return_when=asyncio.FIRST_COMPLETED)
-            for t in pending:
-                t.cancel()
-            if recv in done:
-                msg = recv.result()
-                if msg in ("ping", ""):
-                    await ws.send_json({"seq": last_sent, "event": {"type": "pong"}})
-                else:
-                    # client may push commands as raw RPC frames
-                    try:
-                        frame = json.loads(msg)
-                        sess._next_id += 1
-                        rid = f"ws-{sess._next_id}"
-                        await sess.send_raw({"id": rid, **frame})
-                    except json.JSONDecodeError:
-                        await ws.send_json({"seq": 0, "event": {"type": "ws_error",
-                                                                "error": "bad json"}})
-            if pub in done:
-                seq, event = pub.result()
-                await ws.send_json({"seq": seq, "event": event})
-                last_sent = seq
-    except (WebSocketDisconnect, RuntimeError):
-        pass
+            try:
+                seq, event = await asyncio.wait_for(q.get(), WS_HEARTBEAT_SEC)
+            except asyncio.TimeoutError:
+                if q not in sess.subscribers:
+                    # dropped as a slow consumer; client resumes with ?after=lastSeq
+                    await ws.close(code=4408)
+                    return
+                await send({"seq": 0, "event": {"type": "heartbeat", "lastSeq": last_sent}})
+                continue
+            if seq <= last_sent:        # already delivered via backlog
+                continue
+            await send({"seq": seq, "event": event})
+            last_sent = seq
+
+    async def pump_in() -> None:
+        while True:
+            raw = await ws.receive_text()
+            if raw in ("ping", ""):
+                await send({"seq": 0, "event": {"type": "pong", "lastSeq": last_sent}})
+                continue
+            try:
+                frame = json.loads(raw)
+                if not isinstance(frame, dict) or not frame.get("type"):
+                    raise ValueError("frame must be an object with a type")
+            except (json.JSONDecodeError, ValueError) as e:
+                await send({"seq": 0, "event": {"type": "ws_error", "error": str(e)}})
+                continue
+            if frame["type"] == "auth":
+                continue
+            sess.touch()
+            if frame["type"] in ("extension_ui_response", "host_tool_result",
+                                 "host_tool_update", "host_uri_result"):
+                await sess.send_raw(frame)
+                continue
+            client_id = frame.pop("id", None)
+            ctype = frame.pop("type")
+            try:
+                data = await sess.command(ctype, timeout=60, **frame)
+                await send({"seq": 0, "event": {"type": "rpc_response", "id": client_id,
+                                                "command": ctype, "success": True, "data": data}})
+            except (RpcError, ProcessDead) as e:
+                await send({"seq": 0, "event": {"type": "rpc_response", "id": client_id,
+                                                "command": ctype, "success": False,
+                                                "error": str(e)}})
+
+    out_task = asyncio.create_task(pump_out())
+    in_task = asyncio.create_task(pump_in())
+    try:
+        await asyncio.wait({out_task, in_task}, return_when=asyncio.FIRST_COMPLETED)
     finally:
+        for t in (out_task, in_task):
+            t.cancel()
         sess.unsubscribe(q)
+        with contextlib.suppress(Exception):
+            await ws.close()
+
+
+# ------------------------------------------------------------- idle reaping
+
+async def _reaper() -> None:
+    while True:
+        await asyncio.sleep(300)
+        m = get_manager()
+        await m.reap_dead()
+        now = time.time()
+        for gid, s in list(m.sessions.items()):
+            if s.subscribers or s.is_busy():
+                continue
+            if now - s.last_activity > IDLE_REAP_SEC:
+                with contextlib.suppress(Exception):
+                    await m.stop(gid)
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    app.state.reaper = asyncio.create_task(_reaper())
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    await get_manager().shutdown_all()
 
 
 # ------------------------------------------------------------------- static
@@ -384,6 +688,15 @@ async def ws_session(ws: WebSocket, gw_id: str, token: str = Query("")):
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/manifest.webmanifest")
+async def manifest():
+    return JSONResponse({
+        "name": "ohmypi", "short_name": "omp", "start_url": "/", "display": "standalone",
+        "background_color": "#0d1117", "theme_color": "#0d1117",
+        "icons": [{"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml"}],
+    }, media_type="application/manifest+json")
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

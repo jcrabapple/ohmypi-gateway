@@ -1,13 +1,18 @@
 [Unit]
 Description=ohmypi gateway (omp RPC hub)
 After=network-online.target
+Wants=network-online.target
 
 [Service]
-ExecStart=/home/jason/projects/ohmypi-gateway/.venv/bin/uvicorn gateway.main:app --host 0.0.0.0 --port 9315 --app-dir /home/jason/projects/ohmypi-gateway
-WorkingDirectory=/home/jason/projects/ohmypi-gateway
-Environment=PATH=/home/jason/.bun/bin:/usr/local/bin:/usr/local/sbin:/usr/bin
+WorkingDirectory=%h/projects/ohmypi-gateway
+# Loopback only: the Cloudflare tunnel is the sole way in from the network.
+ExecStart=%h/projects/ohmypi-gateway/.venv/bin/uvicorn gateway.main:app --host 127.0.0.1 --port 9315 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-access-log --ws-ping-interval 20 --ws-ping-timeout 20
+Environment=PATH=%h/.bun/bin:/usr/local/bin:/usr/bin
+EnvironmentFile=-%h/projects/ohmypi-gateway/gateway.env
 Restart=on-failure
 RestartSec=3
+KillMode=mixed
+TimeoutStopSec=20
 
 [Install]
 WantedBy=default.target
