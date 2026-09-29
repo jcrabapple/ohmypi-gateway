@@ -74,7 +74,7 @@ src/
                         diff2 (omp diff parser + per-file extraction), wordmarks
     composer/           slash filtering, send plan, images, drafts, modes, approval answers
     platform/           storage, idb, keyboard (--kb), haptics, notify, clipboard
-    state/              rune stores: auth, sessions (+ grouping), active, nav (hash routes), models, settings, ui
+    state/              rune stores: auth, sessions (+ grouping), active, nav (hash routes), models, settings, plan, ui
     ui/                 Sheet (native dialog), Popover, Adaptive, Menu, ConfirmDialog, Toasts,
                         Icon, Spinner, Kbd, longpress action, swipe, viewport media flags
     overlays.ts         registry for overlays (palette, settings, session-info, inspector), openSettings(target)
@@ -90,8 +90,10 @@ src/
         RailRow, StatusGlyph, ConnectionDot
       SessionView.svelte
         SessionHeader   inline rename, cwd, model chip, ContextMeter, cost, connection text, overflow menu,
-                        "N files changed" button when the session touched files
+                        "N files changed" button when the session touched files, plan panel toggle
         Transcript      auto-follow, jump pill, skeleton / error / gone / empty states
+        PlanPanel       Plan n/m + Activity tabs: phases, progress bar, blocked rows expand, running tools
+        PlanRibbon      one-line plan status pinned at the top of the transcript scroll area
         ChangesView     per-session Changes page (route `#/s/<id>/changes`), one DiffBlock per file
           items/        UserBubble, AssistantMessage, ThinkingRow, ToolGroup (+ToolOutput), DiffBlock,
                         SkillChip, CommandCard, NoticeLine, MessageActions

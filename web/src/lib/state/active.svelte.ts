@@ -7,14 +7,16 @@ import { emitSignedOut } from '../api/client';
 import { sessions as api, type PromptImage, type PromptMode } from '../api/endpoints';
 import { SessionStream, type StreamStatus } from '../api/stream';
 import type {
-  ControlEvent, OmpEvent, OmpMessage, SessionInfo, SessionStatsData, SlashCommand, ThinkingLevel, UiAnswer,
-  UiRequest, UnknownEvent,
+  ControlEvent, OmpEvent, OmpMessage, SessionInfo, SessionState, SessionStatsData, SlashCommand, ThinkingLevel,
+  UiAnswer, UiRequest, UnknownEvent,
 } from '../api/types';
 import { isBlockingUi } from '../api/types';
 import { cacheKey, idbDelete, idbGet, idbSet } from '../platform/idb';
 import { notify } from '../platform/notify';
 import { emptyTranscript, reduce } from '../transcript/reducer';
 import type { TranscriptInput, TranscriptState } from '../transcript/types';
+import { hasActiveTodo } from './plan';
+import { plan } from './plan.svelte';
 import { sessionsStore } from './sessions.svelte';
 
 export type Phase = 'idle' | 'loading' | 'ready' | 'gone' | 'error';
@@ -35,6 +37,8 @@ class ActiveSession {
   connection = $state.raw<StreamStatus>({ state: 'offline', retryAt: null, message: null });
   stats = $state.raw<SessionStatsData | null>(null);
   commands = $state.raw<SlashCommand[]>([]);
+  /** Last /state snapshot (plan, queued count); the poll in refreshQueued refreshes it. */
+  state = $state.raw<SessionState | null>(null);
   /** Messages omp is holding for after the current turn (from /state). */
   queued = $state(0);
   /** Set when omp reports a websocket-level error for this session. Cleared on the next send. */
@@ -45,10 +49,10 @@ class ActiveSession {
 
   private stream: SessionStream | null = null;
   private generation = 0;
-  private statsTimer: ReturnType<typeof setTimeout> | null = null;
+  private statsTimer: ReturnType<typeof setTimeout> | undefined = undefined;
   private pendingEvents: { event: OmpEvent | UnknownEvent; at: number }[] = [];
   private frame = 0;
-  private frameTimer: ReturnType<typeof setTimeout> | null = null;
+  private frameTimer: ReturnType<typeof setTimeout> | undefined = undefined;
 
   async open(gwId: string): Promise<void> {
     if (this.gwId === gwId && this.phase !== 'error' && this.phase !== 'gone') return;
@@ -80,8 +84,8 @@ class ActiveSession {
     this.generation++;
     this.stream?.stop();
     this.stream = null;
-    if (this.statsTimer) clearTimeout(this.statsTimer);
-    this.statsTimer = null;
+    clearTimeout(this.statsTimer);
+    this.statsTimer = undefined;
     this.cancelFlush();
     this.pendingEvents = [];
     this.gwId = null;
@@ -91,9 +95,13 @@ class ActiveSession {
     this.transcript = emptyTranscript();
     this.stats = null;
     this.commands = [];
+    this.state = null;
     this.queued = 0;
     this.wsError = null;
     this.connection = { state: 'offline', retryAt: null, message: null };
+    // Also runs on open() of a different session, since open() closes first. Without this the
+    // narrow-screen plan sheet survives the switch and shows the previous session's plan.
+    plan.reset();
   }
 
   reconnect(): void {
@@ -187,7 +195,11 @@ class ActiveSession {
     if (!gwId) return;
     try {
       const st = await api.state(gwId);
-      if (this.gwId === gwId) this.queued = st.queuedMessageCount ?? 0;
+      if (this.gwId === gwId) {
+        this.state = st;
+        this.queued = st.queuedMessageCount ?? 0;
+        sessionsStore.setTodoActive(gwId, hasActiveTodo(st));
+      }
     } catch {
       /* the count is a courtesy */
     }
@@ -292,9 +304,9 @@ class ActiveSession {
 
   private cancelFlush(): void {
     if (this.frame) cancelAnimationFrame(this.frame);
-    if (this.frameTimer) clearTimeout(this.frameTimer);
+    clearTimeout(this.frameTimer);
     this.frame = 0;
-    this.frameTimer = null;
+    this.frameTimer = undefined;
   }
 
   private flush(): void {
@@ -345,7 +357,7 @@ class ActiveSession {
   }
 
   private scheduleStats(): void {
-    if (this.statsTimer) clearTimeout(this.statsTimer);
+    clearTimeout(this.statsTimer);
     this.statsTimer = setTimeout(() => {
       void this.refreshStats();
       void this.refreshInfo();

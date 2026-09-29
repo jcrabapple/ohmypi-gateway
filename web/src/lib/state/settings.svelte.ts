@@ -1,5 +1,6 @@
 import { isHex, readableInk } from '../color';
 import { device } from '../platform/storage';
+import { viewport } from '../ui/media.svelte';
 
 export type Theme = 'terminal' | 'graphite' | 'paper' | 'contrast';
 export type Density = 'comfortable' | 'compact';
@@ -17,6 +18,8 @@ export interface SettingsData {
   proseFont: ProseFont;
   /** Use `paper` when the OS is light, and the chosen dark theme otherwise. */
   followSystem: boolean;
+  /** Plan panel visibility on wide screens; null = default (open above 900 px, closed below). */
+  planPanelOpen: boolean | null;
 }
 
 const DEFAULTS: SettingsData = {
@@ -26,6 +29,7 @@ const DEFAULTS: SettingsData = {
   width: 'reading',
   proseFont: 'sans',
   followSystem: false,
+  planPanelOpen: null,
 };
 
 const KEY = 'settings';
@@ -42,6 +46,7 @@ export function sanitizeSettings(raw: unknown): SettingsData {
     width: pick(r.width, ['reading', 'wide'], DEFAULTS.width),
     proseFont: pick(r.proseFont, ['sans', 'mono'], DEFAULTS.proseFont),
     followSystem: r.followSystem === true,
+    planPanelOpen: typeof r.planPanelOpen === 'boolean' ? r.planPanelOpen : null,
   };
 }
 
@@ -62,6 +67,15 @@ class SettingsStore {
     if (!this.data.followSystem) return this.data.theme;
     if (this.systemLight) return 'paper';
     return this.data.theme === 'paper' ? 'terminal' : this.data.theme;
+  }
+
+  /** Plan panel visibility; unset falls back to open above 900 px, closed below. */
+  get planPanelOpen(): boolean {
+    return this.data.planPanelOpen ?? !viewport.narrow;
+  }
+
+  set planPanelOpen(open: boolean) {
+    this.update({ planPanelOpen: open });
   }
 
   update(patch: Partial<SettingsData>): void {

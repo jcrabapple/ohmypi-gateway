@@ -116,6 +116,23 @@ export interface CommandsResponse {
   data: { commands: SlashCommand[] };
 }
 
+/** One task in an omp plan phase. `id` is absent in live captures; unknown status coerces to pending. */
+export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
+
+export interface TodoTask {
+  id?: string;
+  content: string;
+  status: TodoStatus;
+  /** Human-readable reason, present on blocked tasks. */
+  blocker?: string;
+}
+
+export interface TodoPhase {
+  id?: string;
+  name?: string;
+  tasks: TodoTask[];
+}
+
 /** GET /sessions/{id}/state (omp get_state minus system prompt and tool dumps). */
 export interface SessionState {
   model: ModelRef | null;
@@ -131,7 +148,8 @@ export interface SessionState {
   queuedMessageCount: number;
   hasPendingAsyncWork: boolean;
   isSettled: boolean;
-  todoPhases: unknown[];
+  /** omp's task plan. Absent on some versions, so entries are normalized defensively. */
+  todoPhases: TodoPhase[] | null;
   fastModeEnabled: boolean;
   fastModeActive: boolean;
   tokensPerSecond: number | null;

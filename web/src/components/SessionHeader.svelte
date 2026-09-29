@@ -3,7 +3,7 @@
   import { busy, compactSession, stopActiveSession } from '../lib/actions.svelte';
   import { openOverlay } from '../lib/overlays';
   import { basename, money, sessionTitle } from '../lib/format';
-  import { active, nav, sessionsStore, ui } from '../lib/state';
+  import { active, nav, plan, sessionsStore, settings, ui } from '../lib/state';
   import { collectChanges } from '../lib/transcript/changes';
   import { Icon, InlineCode, Menu, type MenuItem } from '../lib/ui';
   import { viewport } from '../lib/ui/media.svelte';
@@ -105,6 +105,14 @@
     if (viewport.narrow) ui.open('drawer', e.currentTarget as HTMLElement);
     else ui.railCollapsed = !ui.railCollapsed;
   }
+
+  // Wide: the side panel. Narrow: the full-height sheet.
+  const planOpen = $derived(viewport.narrow ? plan.sheet : settings.planPanelOpen);
+
+  function togglePlan() {
+    if (viewport.narrow) plan.sheet = !plan.sheet;
+    else settings.planPanelOpen = !settings.planPanelOpen;
+  }
 </script>
 
 <header class="head">
@@ -167,6 +175,17 @@
     {/if}
   </div>
 
+  <button
+    type="button"
+    class="icon-btn"
+    aria-label="Plan"
+    aria-expanded={planOpen}
+    aria-controls="plan-panel"
+    title="Plan"
+    onclick={togglePlan}
+  >
+    <Icon name="target" />
+  </button>
   <button
     bind:this={menuBtn}
     type="button"
@@ -248,7 +267,9 @@
     display: flex;
     align-items: center;
     gap: var(--s-3);
-    flex: 0 0 auto;
+    /* Shrinkable: an unshrinkable meta row would size the whole header (and the grid column
+       above it) to the chips' combined width. Children truncate when space runs out. */
+    flex: 0 1 auto;
     justify-content: flex-end;
     min-width: 0;
     color: var(--ink-3);

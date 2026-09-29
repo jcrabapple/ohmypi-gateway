@@ -30,6 +30,7 @@ export const ICONS = {
   compress: '<path d="M5 9h4V5M19 9h-4V5M5 15h4v4M19 15h-4v4"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   mark: '<rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="M8.2 9.5l3 2.5-3 2.5M13 15h3"/>',
+  target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;

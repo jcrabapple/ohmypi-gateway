@@ -36,6 +36,18 @@ describe('groupSessions', () => {
     expect(g.idle.map((s) => s.gwId)).toEqual(['c']);
   });
 
+  it('reads a session with an in_progress todo as working even when not streaming', () => {
+    const g = groupSessions([live('plan', { isStreaming: false }), live('calm')], [], NOW, new Set(['plan']));
+    expect(g.running.map((s) => s.gwId)).toEqual(['plan']);
+    expect(g.idle.map((s) => s.gwId)).toEqual(['calm']);
+  });
+
+  it('pendingUi still wins over todo activity', () => {
+    const g = groupSessions([live('both', { pendingUi: [{ id: '1', method: 'confirm' }] })], [], NOW, new Set(['both']));
+    expect(g.needsYou.map((s) => s.gwId)).toEqual(['both']);
+    expect(g.running).toEqual([]);
+  });
+
   it('buckets history by local calendar day, newest first', () => {
     const at = (days: number, h = 12) => new Date(2026, 8, 29 - days, h, 0, 0);
     const g = groupSessions(

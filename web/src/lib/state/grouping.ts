@@ -39,11 +39,14 @@ export function historyBucket(mtimeSec: number, now: number): HistoryGroup['key'
   return t >= week.getTime() ? 'week' : 'older';
 }
 
-/** Live sessions that have exited are dropped; saved sessions that are live right now are dropped. */
+/** Live sessions that have exited are dropped; saved sessions that are live right now are dropped.
+ *  `todoActive` holds sessions whose last known state has an in_progress todo task; they read as
+ *  working even between agent turns. */
 export function groupSessions(
   live: readonly SessionInfo[],
   saved: readonly SavedSession[],
   now: number = Date.now(),
+  todoActive: ReadonlySet<string> = new Set(),
 ): SessionGroups {
   const needsYou: SessionInfo[] = [];
   const running: SessionInfo[] = [];
@@ -53,7 +56,7 @@ export function groupSessions(
     if (s.exited) continue;
     if (s.ompSessionFile) liveFiles.add(s.ompSessionFile);
     if (s.pendingUi.length > 0) needsYou.push(s);
-    else if (s.isStreaming) running.push(s);
+    else if (s.isStreaming || todoActive.has(s.gwId)) running.push(s);
     else idle.push(s);
   }
 

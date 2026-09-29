@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import type { Snippet } from 'svelte';
   import { showsProgress, toBlocks } from '../lib/transcript/blocks';
   import { active, nav, ui } from '../lib/state';
   import { Icon } from '../lib/ui';
@@ -12,7 +13,7 @@
   import ToolGroup from './items/ToolGroup.svelte';
   import UserBubble from './items/UserBubble.svelte';
 
-  let { onstarter }: { onstarter: (text: string) => void } = $props();
+  let { onstarter, lead }: { onstarter: (text: string) => void; lead?: Snippet } = $props();
 
   const FOLLOW_PX = 120;
 
@@ -110,6 +111,9 @@
   {:else}
     <div class="scroller scroll-y" bind:this={scroller} {onscroll}>
       <div class="inner" bind:this={inner}>
+        {#if lead}
+          <div class="lead">{@render lead()}</div>
+        {/if}
         {#if skeleton}
           <div class="skel" aria-hidden="true">
             <span class="skeleton bubble"></span>
@@ -201,6 +205,13 @@
   .lead {
     font-size: var(--fs-lg);
     font-weight: 600;
+  }
+  /* The lead snippet (PlanRibbon) pins to the top of the scroller instead of scrolling away. */
+  .inner > .lead {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--canvas);
   }
   .sub {
     color: var(--ink-3);

@@ -52,5 +52,8 @@ export default defineConfig({
     environment: 'happy-dom',
     include: ['src/**/*.test.ts'],
     restoreMocks: true,
+    // Component CSS must actually load so tests can assert on injected style rules
+    // (e.g. the sticky plan-ribbon lead) and happy-dom can apply real styling.
+    css: true,
   },
 });
