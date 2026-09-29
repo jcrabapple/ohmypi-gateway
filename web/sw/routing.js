@@ -1,5 +1,5 @@
-// Which strategy the service worker uses for a request. Pure on purpose: sw.js loads this file
-// with importScripts, and the unit tests evaluate this same file, so what is tested is what ships.
+// Which strategy the service worker uses for a request. Pure on purpose: the build inlines this
+// file into sw.js, and the unit tests evaluate this same file, so what is tested is what ships.
 (function (root) {
   'use strict';
 

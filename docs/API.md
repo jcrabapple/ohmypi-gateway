@@ -32,7 +32,7 @@ without credentials.
 | `/` | `web/dist/index.html` (`Cache-Control: no-cache`) when that file exists; otherwise the classic dashboard |
 | `/classic` | the classic Alpine dashboard (`static/index.html`), always. `/static/*` is its assets |
 | `/assets/*` | `web/dist/assets/*`, hashed filenames, `Cache-Control: public, max-age=31536000, immutable` |
-| `/<name>` | a file sitting directly in `web/dist` (`sw.js`, `manifest.webmanifest`, `favicon.svg`, `icon-*.png`, ...). `sw.js` and the manifest are `no-cache`; other root files `public, max-age=3600`. `index.html` is not served at `/index.html`. Subdirectories, dotfiles and symlinks that leave `web/dist` are never served |
+| `/<name>` | a file sitting directly in `web/dist` (`sw.js`, `manifest.webmanifest`, `favicon.svg`, `icon-*.png`, ...). `sw.js` is `no-store` (with `CDN-Cache-Control` and `Cloudflare-CDN-Cache-Control: no-store`, since Cloudflare edge-caches `.js` otherwise) and is a single file with its routing inlined; the manifest is `no-cache`; other root files `public, max-age=3600`. `index.html` is not served at `/index.html`. Subdirectories, dotfiles and symlinks that leave `web/dist` are never served |
 
 `/manifest.webmanifest` falls back to a small generated JSON manifest when
 `web/dist/manifest.webmanifest` doesn't exist. Point the gateway at a build

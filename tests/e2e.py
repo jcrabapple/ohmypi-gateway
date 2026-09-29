@@ -90,12 +90,13 @@ else:
     check("csp-root-is-classic-without-dist", "'unsafe-eval'" in script_src(csp), "(no web/dist: / is the old dashboard)")
 
 # Traversal must never reach a file outside the build, whether or not it is authenticated.
+# 400 is accepted too: a CDN in front (Cloudflare) rejects encoded slashes before the gateway sees them.
 for probe in ("/assets/../auth-token", "/..%2fauth-token", "/%2e%2e/auth-token", "/assets/%2e%2e/auth-token",
               "/assets/..%2f..%2fauth-token", "/static/../auth-token", "/does-not-exist.js"):
     for tok in (None, TOKEN):
         code, _, hdrs = req("GET", probe, token=tok)
         leaked = code == 200 and "text/html" not in (hdrs.get("Content-Type") or "")
-        check(f"traversal-{probe}-{'auth' if tok else 'anon'}", code in (401, 404) and not leaked, f"-> {code}")
+        check(f"traversal-{probe}-{'auth' if tok else 'anon'}", code in (400, 401, 404) and not leaked, f"-> {code}")
 code, _, hdrs = req("GET", "/assets/nope-abc123.js", token=None)
 check("missing-asset-404", code == 404)
 if dist_active:
@@ -107,7 +108,12 @@ if dist_active:
         check("asset-immutable", code == 200 and "immutable" in (hdrs.get("Cache-Control") or ""), assets[0].name)
     if (dist_dir / "sw.js").is_file():
         code, _, hdrs = req("GET", "/sw.js", token=None)
-        check("sw-no-cache", code == 200 and hdrs.get("Cache-Control") == "no-cache")
+        check("sw-no-store", code == 200 and hdrs.get("Cache-Control") == "no-store"
+              and hdrs.get("CDN-Cache-Control") == "no-store" and hdrs.get("Cloudflare-CDN-Cache-Control") == "no-store")
+        sw_src = (dist_dir / "sw.js").read_text()
+        check("sw-inlines-routing", "importScripts" not in sw_src and "ompSwRouting" in sw_src and "__BUILD__" not in sw_src)
+        code, _, _ = req("GET", "/sw-routing.js")
+        check("sw-routing-not-emitted", code == 404 and not (dist_dir / "sw-routing.js").exists())
     code, _, _ = req("GET", "/index.html", token=None)
     check("index-html-not-a-root-file", code in (401, 404))
 

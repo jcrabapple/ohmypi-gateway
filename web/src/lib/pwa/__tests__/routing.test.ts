@@ -5,9 +5,9 @@ import { shouldRegister } from '../register';
 
 type Route = (req: { method: string; url: string; mode?: string; range?: boolean }, origin: string) => 'navigate' | 'asset' | 'bypass';
 
-// Evaluate the very file the service worker loads with importScripts.
+// Evaluate the very file the build inlines into the service worker.
 function loadRoute(): Route {
-  const src = readFileSync(resolve(process.cwd(), 'public/sw-routing.js'), 'utf8');
+  const src = readFileSync(resolve(process.cwd(), 'sw/routing.js'), 'utf8');
   const scope: Record<string, unknown> = {};
   new Function('self', 'globalThis', `${src}`)(scope, scope);
   return (scope.ompSwRouting as { route: Route }).route;
@@ -64,10 +64,11 @@ describe('service worker routing', () => {
 });
 
 describe('service worker script', () => {
-  const sw = readFileSync(resolve(process.cwd(), 'public/sw.js'), 'utf8');
+  const sw = readFileSync(resolve(process.cwd(), 'sw/sw.js'), 'utf8');
 
-  it('loads the routing file, versions its cache and deletes old caches', () => {
-    expect(sw).toContain("importScripts('/sw-routing.js')");
+  it('inlines the routing file, versions its cache and deletes old caches', () => {
+    expect(sw).toContain('/*__ROUTING__*/');
+    expect(sw).not.toContain('importScripts');
     expect(sw).toMatch(/CACHE = 'omp-shell-__BUILD__'/);
     expect(sw).toContain('caches.delete');
     expect(sw).toMatch(/filter\(\(n\) => n !== CACHE\)/);

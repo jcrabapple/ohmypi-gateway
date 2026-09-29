@@ -158,14 +158,17 @@ names redacted and long strings trimmed. Regenerate with
 - **Offline cache.** `sessionsStore.paintCached` and `active.paintCache` read IndexedDB
   (`platform/idb.ts`) first and then reconcile with the network. Skeletons show only when there is no
   cache. Failed IndexedDB access is ignored (private windows).
-- **Service worker.** `public/sw.js` uses `importScripts('/sw-routing.js')`. The routing function
-  (`navigate` / `asset` / `bypass`) lives in that plain script so the tests evaluate the exact file
-  that ships. Navigations are network-first with the cached `/` as the fallback, `/assets/*` is
-  cache-first, and `/api`, `/auth`, `/omp-ws`, `/healthz` are never touched. The cache name carries a
-  build hash stamped into `dist/sw.js` by a small plugin in `vite.config.ts`; activation deletes every
-  other cache. Registration happens only in production builds over a secure context.
-- **Static files.** The gateway serves only root-level files from `dist`, so the manifest, icons,
-  `sw.js` and `sw-routing.js` sit at the root of `public/`.
+- **Service worker.** The source is `sw/sw.js`; the build (`buildServiceWorker` in `vite.config.ts`)
+  writes `dist/sw.js` with the routing function from `sw/routing.js` inlined, so there is exactly one
+  worker file and a CDN cannot pin a stale second script. The routing function (`navigate` / `asset` /
+  `bypass`) stays a plain script so the tests evaluate the exact source that ships. Navigations are
+  network-first with the cached `/` as the fallback, `/assets/*` is cache-first, and `/api`, `/auth`,
+  `/omp-ws`, `/healthz` are never touched. The cache name carries a build hash stamped into
+  `dist/sw.js`; activation deletes every other cache. Registration happens only in production builds
+  over a secure context, with `updateViaCache: 'none'`. The gateway serves `/sw.js` with `no-store`
+  (plus CDN variants) because Cloudflare edge-caches `.js` files otherwise.
+- **Static files.** The gateway serves only root-level files from `dist`, so the manifest and icons
+  sit at the root of `public/`; `sw.js` is generated into the root of `dist`.
 - **Icons.** `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` and `apple-touch-icon.png` were
   generated once from `static/icon.svg` with ImageMagick (`magick`) and are committed. They are not
   rebuilt by `bun run build`. The maskable icon keeps the glyph inside the safe zone.

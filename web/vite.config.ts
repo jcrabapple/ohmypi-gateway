@@ -4,24 +4,25 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Stamp the service worker's cache name with a hash of the built asset names, so every deploy
-// that changes an asset gets a fresh cache and activate deletes the old one.
-function stampServiceWorker() {
+// Build dist/sw.js from sw/sw.js: inline the routing function so there is a single worker file
+// that no CDN can pin at a different version, and stamp the cache name with a hash of the built
+// asset names so every deploy that changes an asset gets a fresh cache.
+function buildServiceWorker() {
   return {
-    name: 'stamp-sw',
+    name: 'build-sw',
     apply: 'build' as const,
     closeBundle() {
       const dist = join(process.cwd(), 'dist');
-      const file = join(dist, 'sw.js');
-      let src: string;
+      let assets: string[];
       try {
-        src = readFileSync(file, 'utf8');
+        assets = readdirSync(join(dist, 'assets'));
       } catch {
         return;
       }
-      const names = readdirSync(join(dist, 'assets')).sort().join('|');
-      const id = createHash('sha256').update(names).digest('hex').slice(0, 10);
-      writeFileSync(file, src.replaceAll('__BUILD__', id));
+      const id = createHash('sha256').update(assets.sort().join('|')).digest('hex').slice(0, 10);
+      const routing = readFileSync(join(process.cwd(), 'sw/routing.js'), 'utf8');
+      const src = readFileSync(join(process.cwd(), 'sw/sw.js'), 'utf8');
+      writeFileSync(join(dist, 'sw.js'), src.replace('/*__ROUTING__*/', () => routing).replaceAll('__BUILD__', id));
     },
   };
 }
@@ -32,7 +33,7 @@ const GATEWAY = process.env.OMPGW_URL ?? 'http://127.0.0.1:9315';
 const passthrough = { target: GATEWAY, changeOrigin: false };
 
 export default defineConfig({
-  plugins: [svelte(), stampServiceWorker()],
+  plugins: [svelte(), buildServiceWorker()],
   resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
   server: {
     port: 5183,

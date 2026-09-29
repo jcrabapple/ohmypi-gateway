@@ -834,6 +834,8 @@ async def _shutdown() -> None:
 # ------------------------------------------------------------------- static
 
 NO_CACHE = {"Cache-Control": "no-cache"}
+# Cloudflare edge-caches .js by default and rewrites browser TTLs; no-store plus its CDN headers stops that.
+NO_STORE = {"Cache-Control": "no-store", "CDN-Cache-Control": "no-store", "Cloudflare-CDN-Cache-Control": "no-store"}
 IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
 
 
@@ -876,8 +878,8 @@ async def web_root_file(name: str):
     p = dist_root_file(name)
     if p is None:
         raise HTTPException(404, "not found")
-    if name == "sw.js":
-        return FileResponse(p, media_type="text/javascript", headers=NO_CACHE)
+    if name in ("sw.js", "sw-routing.js"):
+        return FileResponse(p, media_type="text/javascript", headers=NO_STORE)
     return FileResponse(p, headers={"Cache-Control": "public, max-age=3600"})
 
 

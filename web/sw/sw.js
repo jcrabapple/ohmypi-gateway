@@ -2,8 +2,9 @@
 //   navigation      network first, cached "/" when offline
 //   /assets/*       cache first (file names carry a content hash)
 //   everything else untouched, above all /api, /auth, /omp-ws and /healthz
-// __BUILD__ is replaced at build time, so each deploy gets its own cache and old ones are deleted.
-importScripts('/sw-routing.js');
+// The build inlines sw/routing.js at the marker below (one file, nothing to go stale) and stamps the
+// cache name with a hash, so each deploy gets its own cache and old ones are deleted.
+/*__ROUTING__*/
 
 const CACHE = 'omp-shell-__BUILD__';
 const SHELL = '/';
