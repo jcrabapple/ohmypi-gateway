@@ -75,7 +75,7 @@ register only: typescript, javascript, python, bash, shell, json, yaml, diff,
 css, xml, go, rust, sql, markdown, ini, dockerfile). No UI kit, no CSS
 framework, no router library (hash routing by hand is enough).
 
-Scripts in `web/package.json`: `dev` (vite, port 5173, host 0.0.0.0),
+Scripts in `web/package.json`: `dev` (vite, port 5183, host 0.0.0.0),
 `build` (vite build to `web/dist`), `check` (svelte-check), `test` (vitest run).
 Vite dev server proxies `/api`, `/auth`, `/healthz`, `/.well-known` and
 `/omp-ws` (ws: true) to `http://127.0.0.1:9315`.

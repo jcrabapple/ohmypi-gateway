@@ -108,7 +108,7 @@ session is a transcript on disk that can be resumed.
 | GET | `/sessions/{id}/state` | omp state, minus the system prompt and tool dumps |
 | GET | `/sessions/{id}/messages` | full transcript (omp message objects) |
 | GET | `/sessions/{id}/stats` | token/cost stats |
-| POST | `/sessions/{id}/model` | `{model}` |
+| POST | `/sessions/{id}/model` | `{provider, modelId}` (both required; values from `/catalog/models`) |
 | POST | `/sessions/{id}/thinking` | `{level}`: off, minimal, low, medium, high, xhigh, max |
 | POST | `/sessions/{id}/name` | `{name}` |
 | GET | `/sessions/{id}/models` | models available to this session (RPC `get_available_models`; takes minutes, prefer `/catalog/models`) |

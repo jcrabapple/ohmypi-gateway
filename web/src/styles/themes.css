@@ -1,0 +1,126 @@
+/* Theme presets, selected by data-theme on <html>. `--accent` can be overridden
+   inline from settings; `--accent-ink` is the text color used on top of it. */
+
+:root,
+[data-theme='terminal'] {
+  color-scheme: dark;
+  --bg: #0a0d0b;
+  --canvas: #0e1210;
+  --surface: #141a17;
+  --inset: #0b0f0d;
+  --field: #101512;
+  --ink: #d7e3da;
+  --ink-2: #93a599;
+  --ink-3: #64766b;
+  --line: #1e2823;
+  --line-strong: #2c3a33;
+  --accent: #4ade80;
+  --accent-ink: #04140a;
+  --ok: #4ade80;
+  --warn: #f5b942;
+  --err: #f87171;
+  --ring: 0 0 0 1px var(--line);
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  --scrim: rgb(0 0 0 / 0.55);
+}
+
+[data-theme='graphite'] {
+  color-scheme: dark;
+  --bg: #0f1114;
+  --canvas: #14171b;
+  --surface: #1a1e23;
+  --inset: #101317;
+  --field: #15181d;
+  --ink: #e2e6ea;
+  --ink-2: #9aa3ad;
+  --ink-3: #6b7480;
+  --line: #242a31;
+  --line-strong: #343c46;
+  --accent: #60a5fa;
+  --accent-ink: #06121f;
+  --ok: #4ade80;
+  --warn: #f5b942;
+  --err: #f87171;
+}
+
+[data-theme='paper'] {
+  color-scheme: light;
+  --bg: #f3f1ec;
+  --canvas: #faf9f6;
+  --surface: #ffffff;
+  --inset: #efede7;
+  --field: #ffffff;
+  --ink: #1d1f1c;
+  --ink-2: #555a52;
+  --ink-3: #7c8177;
+  --line: #e3e0d8;
+  --line-strong: #cfcbc0;
+  --accent: #1f7a4d;
+  --accent-ink: #ffffff;
+  --ok: #1f7a4d;
+  --warn: #a15c00;
+  --err: #b42318;
+  --scrim: rgb(20 20 15 / 0.35);
+}
+
+[data-theme='contrast'] {
+  color-scheme: dark;
+  --bg: #000000;
+  --canvas: #000000;
+  --surface: #0d0d0d;
+  --inset: #000000;
+  --field: #000000;
+  --ink: #ffffff;
+  --ink-2: #dcdcdc;
+  --ink-3: #b0b0b0;
+  --line: #6b6b6b;
+  --line-strong: #ffffff;
+  --accent: #ffd60a;
+  --accent-ink: #000000;
+  --ok: #5cff8a;
+  --warn: #ffd60a;
+  --err: #ff6b6b;
+  --scrim: rgb(0 0 0 / 0.75);
+}
+
+/* ANSI 16-color palette used by lib/render/ansi (classes ansi-fg-0 .. ansi-fg-15). */
+:root,
+[data-theme='terminal'],
+[data-theme='graphite'],
+[data-theme='contrast'] {
+  --ansi-0: #3b4540;
+  --ansi-1: #f87171;
+  --ansi-2: #4ade80;
+  --ansi-3: #f5b942;
+  --ansi-4: #60a5fa;
+  --ansi-5: #c084fc;
+  --ansi-6: #22d3ee;
+  --ansi-7: #d7e3da;
+  --ansi-8: #6b7a72;
+  --ansi-9: #fca5a5;
+  --ansi-10: #86efac;
+  --ansi-11: #fcd34d;
+  --ansi-12: #93c5fd;
+  --ansi-13: #d8b4fe;
+  --ansi-14: #67e8f9;
+  --ansi-15: #ffffff;
+}
+
+[data-theme='paper'] {
+  --ansi-0: #2b2d2a;
+  --ansi-1: #b42318;
+  --ansi-2: #1f7a4d;
+  --ansi-3: #a15c00;
+  --ansi-4: #1d4ed8;
+  --ansi-5: #7e22ce;
+  --ansi-6: #0e7490;
+  --ansi-7: #6b6f66;
+  --ansi-8: #7c8177;
+  --ansi-9: #dc2626;
+  --ansi-10: #15803d;
+  --ansi-11: #b45309;
+  --ansi-12: #2563eb;
+  --ansi-13: #9333ea;
+  --ansi-14: #0891b2;
+  --ansi-15: #1d1f1c;
+}

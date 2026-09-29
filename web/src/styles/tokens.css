@@ -1,0 +1,64 @@
+/* Design tokens: custom properties only. Colors live in themes.css. */
+:root {
+  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --r-lg: 10px;
+  --r-md: 8px;
+  --r-sm: 6px;
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
+  --fs-base: 14px;
+  --fs-sm: 12px;
+  --fs-xs: 11px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --lh: 1.55;
+
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 250ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  --rail-w: 280px;
+  --reading-w: 820px;
+  --wide-w: 1100px;
+  --hit: 32px;
+
+  --kb: 0px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+}
+
+@media (pointer: coarse) {
+  :root {
+    --fs-base: 15px;
+    --hit: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+    --dur-slow: 0ms;
+  }
+}
+
+[data-density='compact'] {
+  --s-2: 6px;
+  --s-3: 8px;
+  --s-4: 12px;
+  --lh: 1.45;
+}
+
+[data-width='wide'] {
+  --reading-w: var(--wide-w);
+}
