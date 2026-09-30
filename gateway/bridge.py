@@ -425,18 +425,32 @@ class OmpSession:
         return state or {}
 
     async def messages(self, limit: int = 200) -> dict:
-        """Full message list via the paged endpoint."""
+        """Full message list via the paged endpoint.
+
+        omp refuses get_messages_page while a turn streams or compacts
+        (code session_busy) and when the list changes between pages
+        (stale_cursor). Like omp's own RpcClient, drop the partial pages and
+        fall back to the unpaged get_messages, so opening a busy session
+        works instead of failing with "Cannot page messages while the
+        session is changing".
+        """
         out: list = []
         cursor: str | None = None
-        for _ in range(50):  # hard cap; 50 pages * 256 msgs
-            params: dict = {"limit": min(limit, 256)}
-            if cursor:
-                params["cursor"] = cursor
-            data = await self.command("get_messages_page", timeout=30, **params)
-            out.extend(data.get("messages") or [])
-            cursor = data.get("nextCursor")
-            if not cursor:
-                break
+        try:
+            for _ in range(50):  # hard cap; 50 pages * 256 msgs
+                params: dict = {"limit": min(limit, 256)}
+                if cursor:
+                    params["cursor"] = cursor
+                data = await self.command("get_messages_page", timeout=30, **params)
+                out.extend(data.get("messages") or [])
+                cursor = data.get("nextCursor")
+                if not cursor:
+                    break
+        except RpcError as exc:
+            if exc.code not in ("session_busy", "stale_cursor"):
+                raise
+            data = await self.command("get_messages", timeout=30)
+            out = list((data or {}).get("messages") or [])
         return {"messages": out, "totalMessages": len(out)}
 
     async def last_assistant_text(self) -> str | None:
