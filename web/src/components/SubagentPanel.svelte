@@ -124,7 +124,7 @@
             </span>
             <span class="body">
               <span class="line1">
-                <span class="agent truncate">{row.agent || 'Subagent'}</span>
+                <span class="agent truncate" title={row.agent || 'Subagent'}>{row.agent || 'Subagent'}</span>{#if row.id && row.id !== row.agent}<span class="mono subid truncate" title={row.id}>{row.id}</span>{/if}
                 {#if row.status === 'running' && row.currentTool}
                   <span class="tool mono truncate">{row.currentTool}</span>
                 {/if}
@@ -277,6 +277,11 @@
     border-radius: var(--r-sm);
     padding: 0 var(--s-1);
   }
+  .subid {
+    color: var(--ink-3);
+    font-size: var(--fs-xs);
+    max-width: 10ch;
+  }
   .line2 {
     display: flex;
     align-items: baseline;
@@ -295,6 +300,9 @@
     gap: var(--s-2);
     font-size: var(--fs-xs);
     max-width: 45%;
+    /* Metrics stay on one line; the description truncates instead. */
+    white-space: nowrap;
+    overflow: hidden;
   }
   .model {
     max-width: 14ch;
