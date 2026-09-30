@@ -771,7 +771,9 @@ def scan_saved_sessions(limit: int = 200) -> list[dict]:
             "cwdFolder": p.parent.name,
             "cwd": None,
             "cwdExists": None,
-            "title": None,
+            # '' rather than None: sessions with no prompt snippet have no title,
+            # and a null here crashes every client that trims it.
+            "title": "",
             "running": str(p) in live_files,
         }
         # parse head for a user snippet as the title

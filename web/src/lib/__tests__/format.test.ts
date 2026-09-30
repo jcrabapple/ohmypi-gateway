@@ -35,6 +35,11 @@ describe('format helpers', () => {
     expect(savedFolderLabel({ cwdFolder: '-var-home-me-work-app', cwd: '/var/home/me/work/app' }, [])).toBe('app');
     expect(savedFolderLabel({ cwdFolder: '-work-app', cwd: null }, [])).toBe('work-app');
     expect(savedTitle({ title: '', cwdFolder: '-x', cwd: '/a/b' }, [])).toBe('b');
+    // Regression: a session with no prompt snippet has title null in the saved
+    // list, and .trim() on it killed the whole rail render (2026-09-30).
+    expect(savedTitle({ title: null as unknown as string, cwdFolder: '-x', cwd: '/a/b' }, [])).toBe('b');
+    expect(sessionTitle({ ompSessionName: null, ompSessionFile: '/s/x.jsonl', cwd: '/a/b' },
+      [{ file: '/s/x.jsonl', title: null as unknown as string }])).toBe('b');
   });
   it('uniqueCwds keeps first-seen order', () => {
     expect(uniqueCwds([{ cwd: '/a' }, { cwd: '/b' }, { cwd: '/a' }])).toEqual(['/a', '/b']);

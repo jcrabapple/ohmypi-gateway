@@ -91,7 +91,8 @@ export function sessionTitle(
   const name = s.ompSessionName?.trim();
   if (name) return name;
   if (s.ompSessionFile) {
-    const first = saved.find((x) => x.file === s.ompSessionFile)?.title.trim();
+    // Null-safe: a saved entry with no prompt snippet carries title null.
+    const first = saved.find((x) => x.file === s.ompSessionFile)?.title?.trim();
     if (first) return first;
   }
   return basename(s.cwd) || 'Session';
@@ -115,7 +116,8 @@ export function savedFolderLabel(
 }
 
 export function savedTitle(saved: Pick<SavedSession, 'title' | 'cwdFolder'> & { cwd?: string | null }, liveCwds: readonly string[]): string {
-  return saved.title.trim() || savedFolderLabel(saved, liveCwds);
+  // Title can be null: sessions that never got a prompt have no first-prompt snippet.
+  return (saved.title ?? '').trim() || savedFolderLabel(saved, liveCwds);
 }
 
 export function firstLine(text: string | undefined): string {

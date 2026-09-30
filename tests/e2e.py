@@ -191,6 +191,11 @@ code, _, _ = req("POST", "/api/sessions", {"approvalMode": "sudo"})
 check("approval-validated", code == 422)
 
 sess = ok("POST", "/api/sessions", {"cwd": str(Path(__file__).resolve().parent.parent), "thinking": "off"})
+# Saved-session titles must be strings ('' when unparseable), never null: a null
+# title crashed the web client's rail render (format.ts savedTitle, 2026-09-30).
+lst = ok("GET", "/api/sessions")
+null_titles = [x for x in (lst.get("saved") or []) if x.get("title") is None]
+check("saved-titles-never-null", not null_titles, f"-> {len(null_titles)} null titles")
 gid = sess["gwId"]
 check("spawn", not sess["exited"], f"gw={gid} proto=v{sess['protocolVersion']}")
 led_before = ok("GET", "/api/ledger?days=30")["totals"]["turns"]
