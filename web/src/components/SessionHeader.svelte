@@ -305,9 +305,11 @@
     display: flex;
     align-items: center;
     gap: var(--s-3);
-    /* Shrinkable: an unshrinkable meta row would size the whole header (and the grid column
-       above it) to the chips' combined width. Children truncate when space runs out. */
-    flex: 0 1 auto;
+    /* The meta chips (folder, model, files changed, meter, cost) hold their
+       natural width: the title ellipsizes into whatever space is left instead
+       of starving them. An unshrinkable meta would still size the header row
+       on tiny viewports, but there the meta wraps to its own line (<=900px). */
+    flex: 0 0 auto;
     justify-content: flex-end;
     min-width: 0;
     color: var(--ink-3);
@@ -376,6 +378,8 @@
     }
     .meta {
       order: 5;
+      /* Narrow: back to shrinkable so the wrapped row can't force horizontal
+         overflow; the full row is available so chips rarely need it. */
       flex: 1 0 100%;
       justify-content: flex-start;
       padding: 0 var(--s-2) var(--s-1);
