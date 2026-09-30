@@ -630,6 +630,7 @@ def scan_saved_sessions(limit: int = 200) -> list[dict]:
             "sizeBytes": p.stat().st_size,
             "cwdFolder": p.parent.name,
             "cwd": None,
+            "cwdExists": None,
             "title": None,
             "running": str(p) in live_files,
         }
@@ -639,6 +640,11 @@ def scan_saved_sessions(limit: int = 200) -> list[dict]:
                 head = fh.read(256 * 1024).decode("utf-8", "replace")
             lines = head.splitlines()
             entry["cwd"] = _cwd_from_lines(lines)
+            if entry["cwd"]:
+                # Clients offer recent cwds as one-tap folder picks; a folder
+                # deleted since (e2e temp dirs, removed checkouts) must not be
+                # offered. Only the gateway can see the filesystem.
+                entry["cwdExists"] = os.path.isdir(os.path.expanduser(entry["cwd"]))
             for line in lines:
                 if not line.strip() or '"user"' not in line:
                     continue

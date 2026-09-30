@@ -131,10 +131,13 @@ followed, e.g. `/var/home/...` where `/home` is a symlink), the same form omp
 reports. Compare them as given; no client-side munging. `resumeFrom` accepts
 either form.
 
-**Saved entries** are `{file, mtime, sizeBytes, cwdFolder, cwd, title, running}`.
+**Saved entries** are `{file, mtime, sizeBytes, cwdFolder, cwd, cwdExists, title, running}`.
 `cwd` is the working directory recorded in the transcript (`null` when the file
-has none); prefer it over the mangled `cwdFolder` for display. `running` is true
-when a live session has that file open.
+has none); prefer it over the mangled `cwdFolder` for display. `cwdExists` is
+whether that directory still exists on the gateway host (`null` when `cwd` is
+`null`); clients should not offer a folder with `cwdExists: false` as a
+one-tap pick, and should treat a missing key (older gateways) as unknown.
+`running` is true when a live session has that file open.
 
 **Resuming.** `POST /sessions {resumeFrom}`:
 
