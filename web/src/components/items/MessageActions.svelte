@@ -3,7 +3,8 @@
   // 500 ms long press opens the same actions in a sheet. Both are off while the message streams.
   import type { Snippet } from 'svelte';
   import { copyText } from '../../lib/platform/clipboard';
-  import { ui } from '../../lib/state';
+  import { busy } from '../../lib/actions.svelte';
+  import { active, ui } from '../../lib/state';
   import { Icon, Menu, toast, type MenuItem } from '../../lib/ui';
   import { longpress } from '../../lib/ui/actions';
   import { tap } from '../../lib/platform/haptics';
@@ -15,10 +16,12 @@
     disabled?: boolean;
     align?: 'start' | 'end';
     label: string;
+    /** Forks the session at this message; present only where a fork makes sense. */
+    onfork?: () => void;
     children: Snippet;
   };
 
-  let { text, raw, disabled = false, align = 'end', label, children }: Props = $props();
+  let { text, raw, disabled = false, align = 'end', label, onfork, children }: Props = $props();
 
   let copied = $state(false);
   let sheet = $state(false);
@@ -36,6 +39,11 @@
   }
 
   const items = $derived<MenuItem[]>([
+    // Same guard as the header menu: no fork while a turn runs or one is in flight.
+    ...(onfork ? [{
+      id: 'fork', label: 'Fork from here', icon: 'fork',
+      disabled: busy.forking || active.running, onselect: onfork,
+    } satisfies MenuItem] : []),
     { id: 'copy', label: 'Copy', icon: 'copy', disabled: !text, onselect: () => copy(true) },
     { id: 'inspect', label: 'Inspect', icon: 'terminal', disabled: raw === undefined, onselect: () => ui.inspect(raw) },
   ]);

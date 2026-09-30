@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
-  import { busy, compactSession, stopActiveSession } from '../lib/actions.svelte';
+  import { busy, compactSession, forkLatest, stopActiveSession } from '../lib/actions.svelte';
   import { openOverlay } from '../lib/overlays';
   import { basename, money, sessionTitle } from '../lib/format';
   import { active, nav, plan, reviewed, sessionsStore, settings, ui } from '../lib/state';
@@ -127,6 +127,7 @@
     ...(reviewItem ? [reviewItem] : []),
     { id: 'info', label: 'Session info', icon: 'info', onselect: () => openOverlay('session-info') },
     { id: 'compact', label: 'Compact', icon: 'compress', disabled: busy.compacting || active.running, onselect: compactSession },
+    { id: 'fork', label: 'Fork from here', icon: 'fork', disabled: busy.forking || active.running, onselect: forkLatest },
     { id: 'stop', label: 'Stop session', icon: 'power', danger: true, onselect: stopActiveSession },
   ]);
 

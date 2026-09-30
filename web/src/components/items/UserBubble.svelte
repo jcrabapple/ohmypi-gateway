@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { UserItem } from '../../lib/transcript/types';
+  import { forkFromItem } from '../../lib/actions.svelte';
   import { Icon } from '../../lib/ui';
   import Spinner from '../../lib/ui/Spinner.svelte';
   import MessageActions from './MessageActions.svelte';
@@ -16,7 +17,13 @@
 </script>
 
 <div class="row">
-  <MessageActions text={item.text} raw={item.raw} label="Your message" align="start">
+  <MessageActions
+    text={item.text}
+    raw={item.raw}
+    label="Your message"
+    align="start"
+    onfork={item.pending || item.failed ? undefined : () => void forkFromItem(item)}
+  >
     <div class="bubble" class:pending={item.pending} class:failed={item.failed}>
       {#if item.text}<p>{item.text}</p>{/if}
       {#if item.images > 0}

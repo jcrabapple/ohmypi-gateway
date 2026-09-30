@@ -215,3 +215,45 @@ names redacted and long strings trimmed. Regenerate with
   tokens + cost, model, and a `attempt/max` retry badge. Clicking a row opens a Sheet that fetches
   `GET .../subagents/{sid}/messages` and renders the transcript with the standard item components,
   with a "Load more" button while `nextByte` is present.
+
+## Phase 3 B: session fork
+
+- "Fork from here" lives in two menus: the transcript item menu (user messages only, and only
+  once the message has its omp echo; pending and failed sends are excluded) and the session
+  header overflow (forks at the newest live user message). Both are disabled while a turn runs.
+- Wire facts verified against omp 18.4.2 (differs from the phase-3 guesses): the RPC command is
+  `branch {entryId}` (camelCase) and its data is `{text, cancelled}`. omp switches its LIVE
+  process to a new branched session file; a fork at the first user entry produces an empty
+  session linked via `parentSession`, anything else copies history strictly BEFORE the entry.
+  `get_entries` supplies the entry ids the transcript items do not carry.
+- Gateway flow (`POST /api/sessions/{id}/fork`): validate `entryId` against live entries (422),
+  refuse while busy (409), branch, resolve the new session file from post-branch state, stop the
+  old child (omp persists the branched entries on exit; resuming first reads an empty file), then
+  register the branched file under a new gw id with the same bookkeeping as create. Returns
+  `{gwId, forkedFrom, text}`; `text` seeds the new session's composer draft for a re-send.
+- Web flow (`lib/fork.ts` + `forkFromItem`/`forkLatest` in actions): fetch entries, match the
+  item by timestamp, branch, then compare the child transcript's user texts against the expected
+  ancestor prefix before navigating. A stale item (compacted, changed on another device, 422)
+  and a prefix mismatch each raise a toast with an action ("Fork latest" / "Open anyway")
+  instead of navigating blind. Success toasts "Forked to new session", patches the session store
+  (prepend, same as create), notes `forkedFrom` device-locally, and opens the child.
+- The rail shows a small branch mark on forked sessions while they are live (`sessionsStore.forked`,
+  a capped device-local map of child -> parent gwId; saved rows carry no gwId, so history rows
+  don't badge).
+
+## Phase 3 E: usage ledger
+
+- The gateway keeps one append-only SQLite row per completed agent turn
+  (`gateway/ledger.py`): usage is reported per assistant message, a tool loop is several
+  messages, so the bridge accumulates `message_end` usage and writes exactly one row when
+  `agent_end` finalizes the turn, before waiters resolve (a `wait:true` prompt implies the row is
+  on disk). Failed turns land as rows with `ok: false`. WAL mode, schema version 1, writes never
+  raise into a turn. The database is `~/.omp/ompgw-ledger.db`, overridable with `OMPGW_LEDGER_DB`
+  (the e2e suite points that at a scratch file).
+- `GET /api/ledger?days=&model=&provider=` aggregates totals, per-day and per-model sums;
+  `GET /api/ledger/sessions?days=` rolls up per session name + cwd. See docs/API.md.
+- The web Usage page (`#/usage`, `UsageView.svelte`) shows totals cards, a hand-rolled SVG
+  stacked bar chart per day (input + output, zero-filled across the local range, no chart
+  dependency), and per-model / per-session tables. The 7/30/90-day selector refetches with an
+  AbortController; stale numbers stay on screen until the new ones arrive. The rail footer gains
+  a Usage button (chart glyph) next to Settings.

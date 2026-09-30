@@ -1,6 +1,7 @@
 import { isAbortError } from '../api/client';
 import { sessions as sessionsApi } from '../api/endpoints';
 import type { SavedSession, SessionInfo } from '../api/types';
+import { device } from '../platform/storage';
 import { cacheKey, idbGet, idbSet } from '../platform/idb';
 import { active } from './active.svelte';
 import { groupSessions } from './grouping';
@@ -8,6 +9,18 @@ import { reviewed } from './reviewed.svelte';
 
 const POLL_MS = 5000;
 const CACHE_KEY = cacheKey('sessions-list');
+/** Fork badges: child gwId -> parent gwId. Device-local, like the review marks;
+ *  gwIds are ephemeral per run, so the map is capped like the done ledger. */
+const FORKED_KEY = 'ompgw-forked';
+const FORKED_CAP = 500;
+
+function loadForked(): Record<string, string> {
+  const raw = device.get<unknown>(FORKED_KEY, {});
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) if (typeof v === 'string') out[k] = v;
+  return out;
+}
 /** todoActive entries older than this are dropped on the global poll unless the session is the one
  *  that is open: a background session's todo state is unknown, so a stale entry must not read as
  *  working forever. The open session keeps its entry until its own /state refresh says otherwise. */
@@ -21,6 +34,8 @@ class SessionsStore {
   error = $state<string | null>(null);
   /** Sessions whose last known /state has an in_progress todo task; the rail reads them as working. */
   todoActive = $state<Set<string>>(new Set());
+  /** Child gwId -> parent gwId for sessions created by fork; drives the rail badge. */
+  forked = $state<Record<string, string>>(loadForked());
   /** Last time each session's /state confirmed its todo state; entries go stale without refreshes. */
   private lastTodoRefresh = new Map<string, number>();
   groups = $derived(groupSessions(this.live, this.saved, Date.now(), this.todoActive, reviewed.needsReview));
@@ -98,6 +113,16 @@ class SessionsStore {
       next.delete(gwId);
       this.todoActive = next;
     }
+  }
+
+  /** Record that `child` was forked from `parent` (device-local, capped). */
+  markForked(child: string, parent: string): void {
+    if (this.forked[child] === parent) return;
+    const next: Record<string, string> = { ...this.forked, [child]: parent };
+    const keys = Object.keys(next);
+    while (keys.length > FORKED_CAP) delete next[keys.shift() as string];
+    this.forked = next;
+    device.set(FORKED_KEY, next);
   }
 
   /** Drop todoActive entries gone stale on the global poll: only the open session keeps having its

@@ -11,6 +11,7 @@
   import Overlays from './Overlays.svelte';
   import Rail from './Rail.svelte';
   import SessionView from './SessionView.svelte';
+  import UsageView from './UsageView.svelte';
 
   const COLLAPSED_KEY = 'railCollapsed';
   const NOTIFY_KEY = 'notifyAsked';
@@ -113,7 +114,9 @@
     ></button>
   {/if}
   <main>
-    {#if nav.gwId}
+    {#if nav.usage}
+      <UsageView />
+    {:else if nav.gwId}
       {#key nav.gwId}
         <SessionView gwId={nav.gwId} />
       {/key}

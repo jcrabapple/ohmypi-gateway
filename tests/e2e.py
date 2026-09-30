@@ -12,8 +12,10 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import websockets
@@ -191,12 +193,50 @@ check("approval-validated", code == 422)
 sess = ok("POST", "/api/sessions", {"cwd": str(Path(__file__).resolve().parent.parent), "thinking": "off"})
 gid = sess["gwId"]
 check("spawn", not sess["exited"], f"gw={gid} proto=v{sess['protocolVersion']}")
+led_before = ok("GET", "/api/ledger?days=30")["totals"]["turns"]
 
 try:
     res = ok("POST", f"/api/sessions/{gid}/prompt",
              {"message": "Reply with exactly the single word: pong", "wait": True, "timeout": 90}, timeout=100)
     text = (res.get("lastAssistantText") or "")
     check("prompt-wait", "pong" in text.lower(), repr(text[:40]))
+
+    # --------------------------------------------------------- usage ledger
+    code, _, _ = req("GET", "/api/ledger", token=None)
+    check("ledger-unauth-401", code == 401)
+    code, _, _ = req("GET", "/api/ledger/sessions", token=None)
+    check("ledger-sessions-unauth-401", code == 401)
+    code, _, _ = req("GET", "/api/ledger?days=0")
+    check("ledger-days-validated", code == 422, f"-> {code}")
+    # The pong turn above must have landed as exactly one new row. The bridge
+    # writes it at prompt_result, which can trail the wait=True ack (resolved
+    # at agent_end) by a moment, so poll briefly; the final response also
+    # feeds the shape checks.
+    led = None
+    for _ in range(40):
+        led = ok("GET", "/api/ledger?days=30")
+        if led["totals"]["turns"] == led_before + 1:
+            break
+        time.sleep(0.25)
+    check("ledger-live-turn-row", led is not None and led["totals"]["turns"] == led_before + 1,
+          f"{led_before} -> {led['totals']['turns'] if led else 'no response'}")
+    check("ledger-shape", led is not None
+          and all(k in led for k in ("days", "totals", "perDay", "perModel"))
+          and all(k in led["totals"] for k in ("turns", "turnsOk", "input", "output",
+                                               "cacheRead", "cacheWrite", "cost")))
+    check("ledger-day-shape", led is not None
+          and len(led["perDay"]) == 30
+          and all(set(d) == {"date", "input", "output", "cost"} for d in led["perDay"]))
+    check("ledger-model-shape", led is not None
+          and all(set(m) == {"provider", "model", "turns", "input", "output",
+                             "cacheRead", "cost"} for m in led["perModel"]))
+    roll = ok("GET", "/api/ledger/sessions?days=30")
+    check("ledger-sessions-shape", isinstance(roll.get("sessions"), list)
+          and all(set(s) == {"sessionName", "cwd", "turns", "input", "output",
+                             "cacheRead", "cost", "lastTs"} for s in roll["sessions"]))
+    mine = [s for s in roll["sessions"] if s["cwd"] == str(Path(__file__).resolve().parent.parent)]
+    check("ledger-session-row", len(mine) >= 1 and mine[0]["turns"] >= 1,
+          f"{len(mine)} rollup row(s) for this cwd")
 
     st = ok("GET", f"/api/sessions/{gid}/state")
     check("state-trimmed", "model" in st and "systemPrompt" not in st and "dumpTools" not in st)
@@ -467,6 +507,130 @@ try:
 finally:
     req("DELETE", f"/api/sessions/{fg}")
     shutil.rmtree(fdir, ignore_errors=True)
+
+# --------------------------------------------------- fork (branch at a user entry)
+
+fork_dir = Path(tempfile.mkdtemp(prefix="ompgw-fork-", dir="/tmp")).resolve()
+fork_gw = ok("POST", "/api/sessions", {"cwd": str(fork_dir), "thinking": "off"})
+fg_fork = fork_gw["gwId"]
+fork_new = None
+try:
+    code, _, _ = req("POST", "/api/sessions/no-such-gw/fork", {"entryId": "e1"})
+    check("fork-unknown-session-404", code == 404, f"-> {code}")
+    code, _, _ = req("POST", f"/api/sessions/{fg_fork}/fork", {"entryId": "e1"}, token=None)
+    check("fork-needs-auth", code == 401, f"-> {code}")
+    code, _, _ = req("GET", f"/api/sessions/{fg_fork}/entries", token=None)
+    check("entries-needs-auth", code == 401, f"-> {code}")
+    code, data, _ = req("POST", f"/api/sessions/{fg_fork}/fork")
+    check("fork-no-body-400", code == 400, f"-> {code}")
+    code, _, _ = req("POST", f"/api/sessions/{fg_fork}/fork", {"entryId": 7})
+    check("fork-entryid-type-422", code == 422, f"-> {code}")
+    code, _, _ = req("POST", f"/api/sessions/{fg_fork}/fork", {"entryId": "never-an-entry"})
+    check("fork-unknown-entry-422", code == 422, f"-> {code}")
+    ents = ok("GET", f"/api/sessions/{fg_fork}/entries")["entries"]
+    check("entries-empty-fresh", ents == [], f"{ents}")
+
+    ok("POST", f"/api/sessions/{fg_fork}/prompt",
+       {"message": "Reply with exactly: fork-probe-one", "mode": "prompt", "wait": True})
+    ents = ok("GET", f"/api/sessions/{fg_fork}/entries")["entries"]
+    users = [e for e in ents if e.get("role") == "user"]
+    others = [e for e in ents if e.get("role") != "user"]
+    check("entries-shape", bool(users) and all(isinstance(e.get("entryId"), str) and e.get("entryId")
+                                               for e in ents), f"{len(ents)} entries")
+    # The prompt above guarantees an assistant entry; never fall back to a fake
+    # id, which would 422 as unknown-entry and mask this assertion.
+    check("entries-have-non-user", bool(others), f"{len(ents)} entries")
+    code, _, _ = req("POST", f"/api/sessions/{fg_fork}/fork",
+                     {"entryId": others[0]["entryId"]})
+    check("fork-non-user-entry-422", code == 422, f"-> {code}")
+
+    ok("POST", f"/api/sessions/{fg_fork}/prompt",
+       {"message": "Reply with exactly: fork-probe-two", "mode": "prompt", "wait": True})
+    users = [e for e in ok("GET", f"/api/sessions/{fg_fork}/entries")["entries"] if e.get("role") == "user"]
+    target = users[1]["entryId"]
+    code, data, _ = req("POST", f"/api/sessions/{fg_fork}/fork", {"entryId": target})
+    check("fork-ok", code == 200 and isinstance(data, dict) and bool(data.get("gwId")),
+          f"-> {code} keys={sorted((data or {}).keys())}")
+    fork_new = (data or {}).get("gwId")
+    if fork_new:
+        check("fork-text-carried", data.get("text") == "Reply with exactly: fork-probe-two", repr(data.get("text")))
+        check("fork-old-session-stopped", req("GET", f"/api/sessions/{fg_fork}")[0] == 404)
+        live_ids = [s["gwId"] for s in ok("GET", "/api/sessions?include_saved=false")["live"]]
+        check("fork-new-registered", fork_new in live_ids)
+        branch = ok("GET", f"/api/sessions/{fork_new}/messages")["messages"]
+
+        def user_texts(msgs):
+            out = []
+            for m in msgs:
+                if not isinstance(m, dict) or m.get("role") != "user":
+                    continue
+                c = m.get("content")
+                if isinstance(c, str):
+                    out.append(c)
+                elif isinstance(c, list):
+                    out.extend(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+            return [t for t in (s.strip() for s in out) if t]
+
+        # History strictly BEFORE the branch point: prompt one and its reply,
+        # never prompt two.
+        want = ["Reply with exactly: fork-probe-one"]
+        got = user_texts(branch)
+        check("fork-ancestor-prefix", got == want, f"got={got[:3]}")
+        check("fork-old-file-saved",
+              any(e["file"] == data.get("forkedFrom") for e in ok("GET", "/api/sessions?limit=200")["saved"]))
+        code, _, _ = req("DELETE", f"/api/sessions/{fork_new}")
+        check("fork-new-stops", code == 200)
+        fork_new = None
+finally:
+    req("DELETE", f"/api/sessions/{fg_fork}")
+    if fork_new:
+        req("DELETE", f"/api/sessions/{fork_new}")
+
+# Concurrent forks on one session serialize on a per-session lock: the winner
+# branches and stops the session, the loser then finds it gone.
+conc_gw = ok("POST", "/api/sessions", {"cwd": str(fork_dir), "thinking": "off"})["gwId"]
+conc_new = None
+try:
+    ok("POST", f"/api/sessions/{conc_gw}/prompt",
+       {"message": "Reply with exactly: fork-probe-conc", "mode": "prompt", "wait": True})
+    target = [e for e in ok("GET", f"/api/sessions/{conc_gw}/entries")["entries"]
+              if e.get("role") == "user"][0]["entryId"]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        res_a, res_b = [f.result() for f in (
+            pool.submit(req, "POST", f"/api/sessions/{conc_gw}/fork", {"entryId": target})
+            for _ in range(2))]
+    codes = sorted(res[0] for res in (res_a, res_b))
+    check("fork-concurrent-one-wins", codes in ([200, 404], [200, 409]), f"-> {codes}")
+    for res in (res_a, res_b):
+        if res[0] == 200 and isinstance(res[1], dict) and res[1].get("gwId"):
+            conc_new = res[1]["gwId"]
+finally:
+    req("DELETE", f"/api/sessions/{conc_gw}")
+    if conc_new:
+        req("DELETE", f"/api/sessions/{conc_new}")
+
+# Fork at the root user entry: omp creates an EMPTY session linked to the old
+# file (parentSession lineage), so the new transcript is legitimately empty.
+root_gw = ok("POST", "/api/sessions", {"cwd": str(fork_dir), "thinking": "off"})["gwId"]
+root_new = None
+try:
+    ok("POST", f"/api/sessions/{root_gw}/prompt",
+       {"message": "Reply with exactly: fork-probe-root", "mode": "prompt", "wait": True})
+    root_entry = next(e for e in ok("GET", f"/api/sessions/{root_gw}/entries")["entries"]
+                      if e.get("role") == "user")["entryId"]
+    code, data, _ = req("POST", f"/api/sessions/{root_gw}/fork", {"entryId": root_entry})
+    root_new = (data or {}).get("gwId") if code == 200 else None
+    check("fork-root-ok", code == 200 and bool(root_new)
+          and (data or {}).get("text") == "Reply with exactly: fork-probe-root",
+          f"-> {code} keys={sorted((data or {}).keys())}")
+    if root_new:
+        root_msgs = ok("GET", f"/api/sessions/{root_new}/messages")
+        check("fork-root-empty-transcript", root_msgs["totalMessages"] == 0, f"{root_msgs['totalMessages']}")
+finally:
+    if root_new:
+        req("DELETE", f"/api/sessions/{root_new}")
+    req("DELETE", f"/api/sessions/{root_gw}")
+    shutil.rmtree(fork_dir, ignore_errors=True)
 
 check("stop-reaped", all(s["gwId"] != gid for s in ok("GET", "/api/sessions?include_saved=false")["live"]))
 

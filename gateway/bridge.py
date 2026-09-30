@@ -22,6 +22,8 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from .ledger import record_turn, split_model_id
+
 log = logging.getLogger("ohmpi-gateway.bridge")
 
 OMP_BIN = os.path.expanduser("~/.bun/bin/omp")
@@ -41,6 +43,13 @@ if DEFAULT_APPROVAL_MODE not in APPROVAL_MODES:
 UI_DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
 
 STDOUT_LINE_LIMIT = 64 * 1024 * 1024  # bytes per stdout line from omp
+
+# prompt_result statuses that mark a turn failed or aborted (ok = 0 in the ledger).
+_TURN_FAILURE_STATUSES = ("error", "failed", "aborted")
+# omp emits agent_end BEFORE prompt_result, so the ledger row waits for
+# prompt_result (it carries the turn's final status). If prompt_result never
+# arrives, this timer writes the row so the turn is not lost.
+_LEDGER_PROMPT_GRACE_S = 30.0
 
 def canonical_path(p: str | os.PathLike | None) -> str | None:
     if not p:
@@ -135,6 +144,15 @@ class OmpSession:
         self.last_state: dict | None = None
 
         self._turn_waiters: list[asyncio.Future] = []
+        # Usage ledger: usage is reported per assistant message, a tool loop is
+        # several messages but ONE turn. omp emits agent_end BEFORE
+        # prompt_result, so the row is flushed at prompt_result (which carries
+        # the final status); agent_end only pre-computes the accumulator and
+        # arms the fallback timer.
+        self._turn_acc: dict | None = None
+        self._turn_failed = False
+        self._turn_flushed = False
+        self._turn_flush_timer: asyncio.TimerHandle | None = None
         self._negotiation: asyncio.Task | None = None
         # Keep a reference: asyncio only keeps weak refs to tasks, an unreferenced
         # one can be garbage-collected mid-flight.
@@ -286,12 +304,40 @@ class OmpSession:
             self.omp_session_file = info.get("sessionFile") or self.omp_session_file
             self.omp_session_id = info.get("sessionId") or self.omp_session_id
             self.omp_session_name = info.get("name") or info.get("sessionName") or self.omp_session_name
-        elif ftype == "agent_start":
+        if ftype == "agent_start":
             self.streaming = True
+            self._turn_reset()
         elif ftype == "extension_ui_request" and obj.get("method") in UI_DIALOG_METHODS:
             self.pending_ui[obj["id"]] = obj
+        elif ftype == "message_end":
+            msg = obj.get("message")
+            if isinstance(msg, dict):
+                self._turn_accumulate(msg)
+        elif ftype == "prompt_result":
+            if obj.get("status") in _TURN_FAILURE_STATUSES:
+                self._turn_failed = True
+            # prompt_result carries the turn's final status and follows
+            # agent_end, so this is where the ledger row is written. acc is
+            # None when no turn is open (stray event) or agent_end never ran;
+            # either way there is nothing to record.
+            if not self._turn_flushed and self._turn_acc is not None:
+                self._ledger_flush()
         elif ftype == "agent_end":
             self.streaming = False
+            if not self._turn_flushed:
+                if self._turn_acc is None:
+                    # Builds that never send per-message usage: fall back to
+                    # the message list agent_end carries, so prompt_result can
+                    # flush a complete row (it has no messages itself).
+                    self._turn_acc = {"input": 0, "output": 0, "cache_read": 0,
+                                      "cache_write": 0, "cost": 0.0, "model": None}
+                    for m in obj.get("messages") or []:
+                        if isinstance(m, dict):
+                            self._turn_accumulate(m)
+                # The row waits for prompt_result; the timer is the fallback
+                # if it never arrives.
+                self._turn_flush_timer = asyncio.get_running_loop().call_later(
+                    _LEDGER_PROMPT_GRACE_S, self._ledger_flush)
             if self.pending_ui:
                 # omp abandons open dialogs when a turn ends (abort, error).
                 for rid in list(self.pending_ui):
@@ -342,6 +388,76 @@ class OmpSession:
             except asyncio.QueueFull:
                 # Slow consumer: drop it; the client reconnects with ?after=seq.
                 self.subscribers.discard(q)
+
+    # ----------------------------------------------------------- usage ledger
+
+    def _turn_reset(self) -> None:
+        """Start a fresh turn: drop any state (and fallback timer) a previous
+        turn left behind."""
+        self._cancel_flush_timer()
+        self._turn_acc = None
+        self._turn_failed = False
+        self._turn_flushed = False
+
+    def _turn_accumulate(self, msg: dict) -> None:
+        """Sum one message's usage into the open turn. Ignores user echoes and
+        messages without usage; missing fields just contribute zero. Never
+        raises: a malformed frame must not kill the session reader."""
+        try:
+            self._turn_sum(msg)
+        except Exception:
+            log.exception("[%s] usage accumulate failed", self.gw_id)
+
+    def _turn_sum(self, msg: dict) -> None:
+        usage = msg.get("usage")
+        if not isinstance(usage, dict):
+            return
+        acc = self._turn_acc
+        if acc is None:
+            acc = self._turn_acc = {"input": 0, "output": 0, "cache_read": 0,
+                                    "cache_write": 0, "cost": 0.0, "model": None}
+
+        def num(key: str) -> float:
+            v = usage.get(key)
+            return v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
+
+        acc["input"] += int(num("input"))
+        acc["output"] += int(num("output"))
+        acc["cache_read"] += int(num("cacheRead"))
+        acc["cache_write"] += int(num("cacheWrite"))
+        cost = usage.get("cost")
+        if isinstance(cost, dict):
+            total = cost.get("total")
+            if isinstance(total, (int, float)) and not isinstance(total, bool):
+                acc["cost"] += total
+        if acc["model"] is None and isinstance(msg.get("model"), str) and msg["model"]:
+            acc["model"] = msg["model"]
+
+    def _cancel_flush_timer(self) -> None:
+        if self._turn_flush_timer is not None:
+            self._turn_flush_timer.cancel()
+            self._turn_flush_timer = None
+
+    def _ledger_flush(self) -> None:
+        """Write the finished turn as ONE row. Never raises, never blocks a turn."""
+        self._cancel_flush_timer()
+        if self._turn_flushed:
+            return
+        self._turn_flushed = True
+        try:
+            acc = self._turn_acc or {"input": 0, "output": 0, "cache_read": 0,
+                                     "cache_write": 0, "cost": 0.0, "model": None}
+            provider, model = split_model_id(acc.get("model"))
+            record_turn(gw_id=self.gw_id, session_name=self.omp_session_name, cwd=self.cwd,
+                        provider=provider, model=model,
+                        input_tokens=acc["input"], output_tokens=acc["output"],
+                        cache_read=acc["cache_read"], cache_write=acc["cache_write"],
+                        cost_usd=acc["cost"], ok=not self._turn_failed)
+        except Exception:
+            log.exception("[%s] ledger flush failed", self.gw_id)
+        finally:
+            self._turn_acc = None
+            self._turn_failed = False
 
     # ----------------------------------------------------------------- writes
 
@@ -468,6 +584,13 @@ class OmpSession:
             out = list((data or {}).get("messages") or [])
         return {"messages": out, "totalMessages": len(out)}
 
+    async def entries(self) -> dict:
+        """Raw session-file entries via get_entries: {entries, leafId}. Entry ids
+        are the fork targets; only user message entries branch (omp rejects the
+        rest with "Invalid entry ID for branching")."""
+        data = await self.command("get_entries", timeout=30)
+        return data if isinstance(data, dict) else {}
+
     async def last_assistant_text(self) -> str | None:
         data = await self.command("get_last_assistant_text", timeout=15)
         if isinstance(data, dict):
@@ -506,6 +629,8 @@ class OmpSession:
         self.exited = True
         if self.proc is not None:
             self.exit_code = self.proc.returncode
+        # A dead child never completes its turn: no pending fallback flush.
+        self._cancel_flush_timer()
         for fut in list(self.pending.values()):
             if not fut.done():
                 fut.set_exception(ProcessDead(f"omp exited (code {self.exit_code})"))

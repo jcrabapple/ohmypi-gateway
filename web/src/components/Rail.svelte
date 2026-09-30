@@ -105,6 +105,7 @@
                 status={g.status}
                 active={nav.gwId === s.gwId}
                 badge={s.pendingUi.length}
+                forked={s.gwId in sessionsStore.forked}
                 menu={rowMenu(s)}
                 onclick={() => nav.open(s.gwId)}
               />
@@ -138,6 +139,16 @@
     <span class="spacer"></span>
     <button type="button" class="icon-btn" aria-label="Settings" title="Settings ({shortcutText('settings')})" onclick={() => openSettings()}>
       <Icon name="sliders" />
+    </button>
+    <button
+      type="button"
+      class="icon-btn"
+      aria-label="Usage"
+      title="Usage"
+      aria-pressed={nav.usage}
+      onclick={() => nav.openUsage()}
+    >
+      <Icon name="chart" />
     </button>
     <button type="button" class="icon-btn" aria-label="Sign out" title="Sign out" onclick={signOut}>
       <Icon name="power" />

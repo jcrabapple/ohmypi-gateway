@@ -24,6 +24,15 @@ describe('RailRow', () => {
     expect(glyph!.querySelector('svg')).not.toBeNull();
   });
 
+  it('marks forked sessions with a branch badge in the title', () => {
+    const plain = render(RailRow, { title: 't', sub: 's', onclick: () => {} });
+    expect(plain.target.querySelector('.title .fork')).toBeNull();
+    cleanup();
+
+    const forked = render(RailRow, { title: 't', sub: 's', forked: true, onclick: () => {} });
+    expect(forked.target.querySelector('.title .fork svg')).not.toBeNull();
+  });
+
   it('opens the menu and runs the chosen action', async () => {
     const picks: string[] = [];
     const { target } = render(RailRow, {

@@ -2,9 +2,9 @@
 // no caching. Stores decide what to do with the results.
 import { api, resetSignedOut } from './client';
 import type {
-  ApprovalMode, CatalogModels, CommandsResponse, EventsResponse, FileIndexEntry, FilesResponse,
-  MessagesResponse, SavedSession, SessionInfo, SessionsList, SessionState, SessionStats,
-  SubagentMessagesResponse, SystemInfo, ThinkingLevel, UiAnswer, UiRequest,
+  ApprovalMode, CatalogModels, CommandsResponse, EntriesResponse, EventsResponse, FileIndexEntry, FilesResponse,
+  ForkResponse, LedgerResponse, LedgerSessionsResponse, MessagesResponse, SavedSession, SessionInfo, SessionsList,
+  SessionState, SessionStats, SubagentMessagesResponse, SystemInfo, ThinkingLevel, UiAnswer, UiRequest,
 } from './types';
 
 export type PromptMode = 'prompt' | 'steer' | 'follow_up';
@@ -52,6 +52,9 @@ export const host = {
     }),
   skills: () => api<{ installed: { name: string; description: string; symlink: boolean }[] }>('/api/skills'),
   usage: () => api<{ raw: string; error?: string }>('/api/usage', { timeoutMs: 120_000 }),
+  ledger: (days: number, signal?: AbortSignal) => api<LedgerResponse>(`/api/ledger?days=${days}`, { signal }),
+  ledgerSessions: (days: number, signal?: AbortSignal) =>
+    api<LedgerSessionsResponse>(`/api/ledger/sessions?days=${days}`, { signal }),
 };
 
 export const sessions = {
@@ -63,6 +66,12 @@ export const sessions = {
   info: (id: string, signal?: AbortSignal) => api<SessionInfo>(sid(id), { signal }),
   stop: (id: string) => api<unknown>(sid(id), { method: 'DELETE' }),
   messages: (id: string, signal?: AbortSignal) => api<MessagesResponse>(`${sid(id)}/messages`, { signal }),
+  /** Session-file message entries; user rows are the fork targets. */
+  entries: (id: string, signal?: AbortSignal) => api<EntriesResponse>(`${sid(id)}/entries`, { signal }),
+  /** Branch at a user entry. The fork carries history before that entry;
+   *  `text` is the forked message, for prefilling the composer. */
+  fork: (id: string, entryId: string) =>
+    api<ForkResponse>(`${sid(id)}/fork`, { method: POST, body: { entryId }, timeoutMs: 120_000 }),
   state: (id: string, signal?: AbortSignal) => api<SessionState>(`${sid(id)}/state`, { signal }),
   stats: (id: string, signal?: AbortSignal) => api<SessionStats>(`${sid(id)}/stats`, { signal }),
   commands: (id: string, signal?: AbortSignal) => api<CommandsResponse>(`${sid(id)}/commands`, { signal }),

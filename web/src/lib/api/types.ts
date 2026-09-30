@@ -358,6 +358,30 @@ export interface SubagentMessagesResponse {
   sessionFile?: string | null;
 }
 
+// ---------------------------------------------------------------------- fork
+
+/** GET /sessions/{id}/entries : one row per session-file message entry.
+ *  Fork targets are the rows with role "user". */
+export interface SessionEntry {
+  entryId: string;
+  role: string;
+  timestamp: number | null;
+}
+
+export interface EntriesResponse {
+  entries: SessionEntry[];
+}
+
+/** POST /sessions/{id}/fork */
+export interface ForkResponse {
+  gwId: string;
+  /** Session file the fork branched from. */
+  forkedFrom?: string | null;
+  /** The forked message's text: the fork carries history strictly before it,
+   *  so clients prefill the composer for a re-send. */
+  text?: string | null;
+}
+
 // -------------------------------------------------------------------- events
 
 export type AssistantMessageEventType =
@@ -476,4 +500,62 @@ export interface EventsResponse {
   events: { seq: number; event: OmpEvent | UnknownEvent }[];
   lastSeq: number;
   gap?: boolean;
+}
+
+// ------------------------------------------------------------- usage ledger
+
+/** One row per completed agent turn, aggregated by the gateway. */
+export interface LedgerTotals {
+  turns: number;
+  turnsOk: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+}
+
+export interface LedgerDay {
+  date: string;
+  input: number;
+  output: number;
+  cost: number;
+}
+
+export interface LedgerModelRow {
+  provider: string | null;
+  model: string | null;
+  turns: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cost: number;
+}
+
+/** GET /api/ledger?days=&model=&provider= — `model` accepts the bare name or
+ * provider/name. perDay is always exactly `days` gateway-local calendar
+ * buckets, zero-filled, oldest first, keyed by ISO date in the gateway's
+ * timezone; chart it by those strings, never by re-derived local dates. */
+export interface LedgerResponse {
+  days: number;
+  totals: LedgerTotals;
+  perDay: LedgerDay[];
+  perModel: LedgerModelRow[];
+}
+
+export interface LedgerSessionRow {
+  sessionName: string | null;
+  cwd: string | null;
+  turns: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cost: number;
+  lastTs: number;
+}
+
+/** GET /api/ledger/sessions?days= */
+export interface LedgerSessionsResponse {
+  days: number;
+  sessions: LedgerSessionRow[];
 }

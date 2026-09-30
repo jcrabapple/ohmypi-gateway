@@ -73,7 +73,8 @@ Rules that matter for client authors:
 
 ## REST surface
 
-All under `/api`, JSON in/out, errors as `{"error": "..."}`.
+All under `/api`, JSON in/out, errors as `{"error": "..."}` (query and body
+validation failures included, HTTP 422).
 
 ### Host and configuration
 
@@ -90,6 +91,23 @@ All under `/api`, JSON in/out, errors as `{"error": "..."}`.
 | GET | `/agents` | subagent definitions |
 | GET | `/usage` | `omp usage` report |
 | GET | `/stats` | `omp stats` report |
+
+### Usage ledger
+
+One append-only SQLite row per completed agent turn, written by the bridge at
+`prompt_result` (which carries the turn's final status, so an aborted or
+failed turn is a row with `ok: false`), summed across the turn's assistant
+messages. `agent_end` is the fallback write if `prompt_result` never arrives.
+The database lives at `~/.omp/ompgw-ledger.db` (override with
+`OMPGW_LEDGER_DB`), WAL mode, schema-migrated stepwise via `PRAGMA
+user_version` (currently version 1); a database from a newer gateway disables
+the sink and the read routes instead of touching it. Only session name, cwd,
+provider and model are stored per turn.
+
+| Method | Path | |
+|---|---|---|
+| GET | `/ledger?days=&model=&provider=` | aggregates over the last `days` local calendar days (1..365, default 30); `model` accepts the bare model name or `provider/model`, `provider` is exact: `{days, totals: {turns, turnsOk, input, output, cacheRead, cacheWrite, cost}, perDay: [{date, input, output, cost}], perModel: [{provider, model, turns, input, output, cacheRead, cost}]}`. `perDay` is always exactly `days` entries, keyed by ISO date in the gateway's timezone, zero-filled, oldest first, so chart bars sum to the totals. Costs are raw sums of per-turn USD floats; clients round for display |
+| GET | `/ledger/sessions?days=` | per-session rollup (grouped by session name + cwd), newest activity first: `{days, sessions: [{sessionName, cwd, turns, input, output, cacheRead, cost, lastTs}]}` |
 
 ### Sessions
 
@@ -108,6 +126,9 @@ session is a transcript on disk that can be resumed.
 | POST | `/sessions/{id}/compact` | `{instructions?}` |
 | GET | `/sessions/{id}/state` | omp state, minus the system prompt and tool dumps |
 | GET | `/sessions/{id}/messages` | full transcript (omp message objects) |
+| GET | `/sessions/{id}/entries` | session-file message entries via omp `get_entries`: `{entries: [{entryId, role, timestamp}]}`. The `entryId`s are the fork targets; only `role: "user"` rows branch |
+| POST | `/sessions/{id}/fork` | branch at a user entry (omp `branch`): `{entryId}`. Unknown session 404; `entryId` missing/not a string, unknown, or not a user message entry 422; a busy session (turn running or compacting) 409; omp command errors 400. Forks are serialized per session: a second concurrent fork waits, then sees the session stopped (404). A fork replaces its own parent (stop + register), so it is net-zero: it is allowed at the session cap, and 429s only when it would push the count past the cap. On success omp rewrites its live process into a new branched session file (the fork carries the history strictly BEFORE the entry; forking at the first user entry produces an empty session linked to the old file), so the gateway registers that branched session under a new gw id exactly like POST /sessions and stops the old child: returns `{gwId, forkedFrom, text}` where `text` is the forked message for a composer prefill. The old transcript stays on disk as a saved session |
+| GET | `/sessions/{id}/files?prefix=` | index-only listing of ONE directory of the session cwd, for @-file mentions: `{entries: [{name, path, isDir, size}]}`. Names and sizes only; file contents are never served. Dotfiles excluded, dirs before files, at most 200 entries. `prefix=""` lists the cwd; an absolute prefix or any `..` segment is 422, a path whose real location is outside the session cwd (e.g. an escaping symlink) is 403, an unknown path is 404, unknown session 404 |
 | GET | `/sessions/{id}/subagents` | subagent registry snapshot from omp `get_subagents` (`{"subagents": [...]}`; empty until omp spawns one). The gateway subscribes every live session at `progress` level after v2 negotiation, so `subagent_progress` / `subagent_lifecycle` events flow on the WebSocket |
 | GET | `/sessions/{id}/subagents/{sid}/messages?from=` | one subagent's transcript via omp `get_subagent_messages` (`subagentId`, `fromByte`): `{messages, nextByte, reset, sessionFile}`. Page forward with `from=<nextByte>` while `nextByte` is present. Unknown `sid` is an omp command error → 400 |
 | GET | `/sessions/{id}/stats` | token/cost stats |

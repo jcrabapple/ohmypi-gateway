@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SessionInfo } from '../../lib/api/types';
+import { emptyTranscript } from '../../lib/transcript/reducer';
 import { active, reviewed, ui } from '../../lib/state';
 import SessionHeader from '../SessionHeader.svelte';
 import { cleanup, render, settle } from './mount';
@@ -57,5 +58,24 @@ describe('SessionHeader review actions', () => {
     unpin!.click();
     await settle();
     expect(reviewed.needsReview.has('gw-m')).toBe(false);
+  });
+
+  it('offers Fork from here in the session menu, disabled while the turn runs', async () => {
+    active.gwId = 'gw-f';
+    active.info = info('gw-f');
+    const { target } = render(SessionHeader, {});
+    const open = () => {
+      target.querySelector<HTMLButtonElement>('button[aria-label="Session menu"]')!.click();
+      return settle();
+    };
+    await open();
+    const fork = () =>
+      [...target.querySelectorAll('button')].find((b) => b.textContent?.includes('Fork from here'));
+    expect(fork()).toBeDefined();
+    expect(fork()!.disabled).toBe(false);
+
+    active.transcript = { ...emptyTranscript(), running: true };
+    await settle();
+    expect(fork()!.disabled).toBe(true);
   });
 });

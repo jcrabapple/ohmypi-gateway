@@ -6,6 +6,7 @@ import { sessionsStore } from './sessions.svelte';
 import { ui } from './ui.svelte';
 
 const ROUTE = /^#\/s\/([\w-]+)(\/changes)?$/;
+const USAGE = '#/usage';
 
 export interface HashRoute {
   gwId: string;
@@ -23,6 +24,8 @@ class Nav {
   view = $state<'transcript' | 'changes'>(
     parseHash(globalThis.location?.hash ?? '')?.changes ? 'changes' : 'transcript',
   );
+  /** Gateway-wide usage page (`#/usage`). */
+  usage = $state((globalThis.location?.hash ?? '') === USAGE);
   /** Saved session file being resumed right now, for the spinner on its row. */
   resuming = $state<string | null>(null);
   /** The last session that died on us, so the new-session sheet can offer its draft. */
@@ -34,6 +37,7 @@ class Nav {
       const r = parseHash(location.hash);
       this.gwId = r?.gwId ?? null;
       this.view = r?.changes ? 'changes' : 'transcript';
+      this.usage = location.hash === USAGE;
     };
     on();
     window.addEventListener('hashchange', on);
@@ -43,14 +47,23 @@ class Nav {
   open(gwId: string): void {
     ui.close('drawer');
     this.view = 'transcript';
+    this.usage = false;
     if (location.hash === `#/s/${gwId}`) this.gwId = gwId;
     else location.hash = `#/s/${gwId}`;
+  }
+
+  /** The gateway-wide usage page. */
+  openUsage(): void {
+    ui.close('drawer');
+    if (location.hash === USAGE) this.usage = true;
+    else location.hash = USAGE;
   }
 
   /** The open session's per-session Changes page. */
   openChanges(gwId: string): void {
     ui.close('drawer');
     this.view = 'changes';
+    this.usage = false;
     if (location.hash === `#/s/${gwId}/changes`) {
       this.gwId = gwId;
     } else {
@@ -63,6 +76,7 @@ class Nav {
     if (location.hash) history.pushState(null, '', location.pathname + location.search);
     this.gwId = null;
     this.view = 'transcript';
+    this.usage = false;
   }
 
   /** Resume a saved transcript. If omp is already running it, open the live session instead. */

@@ -11,12 +11,14 @@
     active?: boolean;
     busy?: boolean;
     badge?: number;
+    /** Session was created by fork: a small branch mark beside the title. */
+    forked?: boolean;
     /** Overflow actions; the kebab button renders only when this is non-empty. */
     menu?: MenuItem[];
     onclick: () => void;
   };
 
-  let { title, sub, status, active = false, busy = false, badge = 0, menu, onclick }: Props = $props();
+  let { title, sub, status, active = false, busy = false, badge = 0, forked = false, menu, onclick }: Props = $props();
 
   let menuOpen = $state(false);
   let menuBtn: HTMLButtonElement | undefined = $state();
@@ -32,7 +34,10 @@
       {/if}
     </span>
     <span class="text">
-      <span class="title truncate"><InlineCode text={title} /></span>
+      <span class="title truncate">
+        {#if forked}<span class="fork" title="Forked from another session"><Icon name="fork" size={12} /></span>{/if}
+        <InlineCode text={title} />
+      </span>
       <span class="sub truncate">{sub}</span>
     </span>
     {#if badge > 1}<span class="badge" aria-label="{badge} waiting">{badge}</span>{/if}
@@ -103,6 +108,12 @@
   }
   .title {
     font-weight: 500;
+  }
+  .fork {
+    display: inline-flex;
+    vertical-align: -1px;
+    margin-right: var(--s-1);
+    color: var(--ink-3);
   }
   .sub {
     color: var(--ink-3);

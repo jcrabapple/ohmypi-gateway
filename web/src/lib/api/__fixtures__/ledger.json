@@ -1,0 +1,77 @@
+{
+  "aggregate": {
+    "days": 30,
+    "totals": {
+      "turns": 12,
+      "turnsOk": 11,
+      "input": 154000,
+      "output": 21000,
+      "cacheRead": 903000,
+      "cacheWrite": 40000,
+      "cost": 1.284
+    },
+    "perDay": [
+      { "date": "2026-09-29", "input": 54000, "output": 9000, "cost": 0.412 },
+      { "date": "2026-09-30", "input": 100000, "output": 12000, "cost": 0.872 }
+    ],
+    "perModel": [
+      {
+        "provider": "z-ai",
+        "model": "glm-5.3-flashx",
+        "turns": 10,
+        "input": 140000,
+        "output": 18000,
+        "cacheRead": 903000,
+        "cost": 1.1
+      },
+      {
+        "provider": "ollama",
+        "model": "devstral-small-2:24b-cloud",
+        "turns": 2,
+        "input": 14000,
+        "output": 3000,
+        "cacheRead": 0,
+        "cost": 0.184
+      }
+    ]
+  },
+  "sessions": {
+    "days": 30,
+    "sessions": [
+      {
+        "sessionName": "usage ledger build",
+        "cwd": "/home/j/projects/ohmypi-gateway",
+        "turns": 9,
+        "input": 120000,
+        "output": 17000,
+        "cacheRead": 800000,
+        "cost": 1.01,
+        "lastTs": 1759190400
+      },
+      {
+        "sessionName": null,
+        "cwd": "/tmp/probe",
+        "turns": 3,
+        "input": 34000,
+        "output": 4000,
+        "cacheRead": 103000,
+        "cost": 0.274,
+        "lastTs": 1759104000
+      }
+    ]
+  },
+  "empty": {
+    "days": 7,
+    "totals": {
+      "turns": 0,
+      "turnsOk": 0,
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0
+    },
+    "perDay": [],
+    "perModel": []
+  }
+}

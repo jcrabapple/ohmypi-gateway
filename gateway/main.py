@@ -19,6 +19,7 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -39,10 +40,12 @@ from .bridge import (
     OMP_BIN,
     ProcessDead,
     RpcError,
+    canonical_path,
     get_manager,
     read_session_cwd,
     scan_saved_sessions,
 )
+from .ledger import DEFAULT_DAYS, close_ledger, get_ledger
 
 VERSION = "0.3.0"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -232,6 +235,19 @@ async def process_dead_handler(request: Request, exc: ProcessDead):
 @app.exception_handler(HTTPException)
 async def http_error_handler(request: Request, exc: HTTPException):
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    """Keep the documented {"error": ...} shape for query/body validation
+    (FastAPI's default is a `detail` array)."""
+    def fmt(err: dict) -> str:
+        loc = ".".join(str(p) for p in err.get("loc", ()) if p not in ("body", "query"))
+        msg = err.get("msg", "invalid value")
+        return f"{loc}: {msg}" if loc else msg
+
+    return JSONResponse({"error": "; ".join(fmt(e) for e in exc.errors()) or "invalid request"},
+                        status_code=422)
 
 
 # ----------------------------------------------------------------------- auth
@@ -441,6 +457,26 @@ async def stats():
     return await _cli_text("stats", timeout=60)
 
 
+# ---------------------------------------------------------------- usage ledger
+# Sync def on purpose: the aggregate calls block on sqlite, and FastAPI runs
+# sync routes in its threadpool instead of on the event loop.
+
+@app.get("/api/ledger")
+def ledger(days: int = Query(DEFAULT_DAYS, ge=1, le=365),
+           model: str | None = None, provider: str | None = None):
+    """Aggregated usage ledger over completed agent turns (one row per turn,
+    written by the bridge at prompt_result). Totals, per-day and per-model
+    sums; `model` accepts the bare name or provider/name, `provider` is exact.
+    perDay is exactly `days` gateway-local calendar buckets, zero-filled."""
+    return get_ledger().aggregate(days=days, model=model or None, provider=provider or None)
+
+
+@app.get("/api/ledger/sessions")
+def ledger_sessions(days: int = Query(DEFAULT_DAYS, ge=1, le=365)):
+    """Per-session rollup (session name + cwd) behind the usage page's session table."""
+    return get_ledger().session_rollup(days=days)
+
+
 # ------------------------------------------------------------------- sessions
 
 MAX_IMAGES = 4
@@ -613,6 +649,166 @@ async def state(gw_id: str):
 @app.get("/api/sessions/{gw_id}/messages")
 async def messages(gw_id: str):
     return await get_session_or_404(gw_id).messages()
+
+
+@app.get("/api/sessions/{gw_id}/entries")
+async def entries(gw_id: str):
+    """Distilled get_entries: one row per session-file message entry, with the
+    entryId the fork route expects. Fork targets are user entries only."""
+    data = await get_session_or_404(gw_id).entries()
+    out = []
+    for e in data.get("entries") or []:
+        if not isinstance(e, dict) or e.get("type") != "message":
+            continue
+        msg = e.get("message") if isinstance(e.get("message"), dict) else {}
+        ts = msg.get("timestamp", e.get("timestamp"))
+        out.append({"entryId": e.get("id"), "role": msg.get("role"),
+                    "timestamp": ts if isinstance(ts, (int, float)) else None})
+    return {"entries": out}
+
+
+def _entry_file(value) -> str | None:
+    return canonical_path(value) if isinstance(value, str) and value else None
+
+
+def _branched_candidate(old_file: str | None, since: float) -> str | None:
+    """The branched session file on disk. omp 18.4.2 writes it at branch time
+    but keeps reporting the OLD file in get_state (no session_info_update
+    either), so the session folder is the only source of truth: the newest
+    .jsonl modified since the branch started that is neither the old file nor
+    a file owned by another live session."""
+    if not old_file:
+        return None
+    live = {s.omp_session_file for s in get_manager().sessions.values() if s.omp_session_file}
+    best: tuple[float, str] | None = None
+    try:
+        for p in Path(old_file).parent.glob("*.jsonl"):
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            if mtime < since or best is not None and mtime <= best[0]:
+                continue
+            f = _entry_file(str(p))
+            if f is None or f == old_file or f in live:
+                continue
+            best = (mtime, f)
+    except OSError:
+        return None
+    return best[1] if best else None
+
+
+async def _branched_file(sess, old_file: str | None, data, since: float) -> str:
+    """The session file omp branched to. omp 18.4.2 answers `branch` with
+    {text, cancelled}, switches its live process to the new file itself, and
+    persists the branched entries to a new file on disk right away while its
+    state keeps naming the old file. So: honor explicit `path`/`sessionFile`
+    keys when an omp build sends them, watch the session's own file tracking,
+    and fall back to scanning the session folder."""
+    want = _entry_file((data or {}).get("path") if isinstance(data, dict) else None) \
+        or _entry_file((data or {}).get("sessionFile") if isinstance(data, dict) else None)
+    if want == old_file:
+        want = None  # omp echoes the old file until its own state update lands
+    deadline = time.monotonic() + 10
+    while want is None and time.monotonic() < deadline:
+        if sess.omp_session_file and sess.omp_session_file != old_file:
+            want = sess.omp_session_file
+            break
+        with contextlib.suppress(RpcError, ProcessDead):
+            st = await sess.get_state()
+            cand = _entry_file(st.get("sessionFile")) if isinstance(st, dict) else None
+            if cand and cand != old_file:
+                want = cand
+        if want is None:
+            want = _branched_candidate(old_file, since)
+        if want is None:
+            await asyncio.sleep(0.1)
+    if want is None:
+        raise HTTPException(500, "branch succeeded but the new session file could not be resolved")
+    return want
+
+
+def _model_flag(value) -> str | None:
+    """A --model/--thinking string for a resumed child. The session's CURRENT
+    values arrive as a model-ref dict from get_state (the launch flags were
+    plain strings), and omp fuzzy-matches "provider/id" forms."""
+    if isinstance(value, dict):
+        mid, provider = value.get("id"), value.get("provider")
+        if isinstance(mid, str) and mid:
+            return f"{provider}/{mid}" if isinstance(provider, str) and provider else mid
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+# One branch at a time per session: omp's branch mutates the live process, so
+# concurrent forks on one session would double-branch from the same file.
+_fork_locks: dict[str, asyncio.Lock] = {}
+
+
+@app.post("/api/sessions/{gw_id}/fork")
+async def fork(gw_id: str, request: Request):
+    """Fork the session at a user entry (omp `branch`). omp rewrites its live
+    process into a new branched session file (the original transcript stays on
+    disk untouched), so the gateway registers that branched session under a new
+    gw id exactly like create does, then stops the now-redundant old process."""
+    body = await json_body(request)
+    entry_id = body.get("entryId")
+    if not isinstance(entry_id, str) or not entry_id:
+        raise HTTPException(422, "entryId required")
+    async with _fork_locks.setdefault(gw_id, asyncio.Lock()):
+        # A concurrent fork may have stopped this session while we waited.
+        sess = get_session_or_404(gw_id)
+        if sess.is_busy():
+            raise HTTPException(409, "session is busy; wait for the turn to end before forking")
+        # Validate against the live entries: omp would reject non-user entries with
+        # "Invalid entry ID for branching", but the 422 says what the client did wrong.
+        for e in (await sess.entries()).get("entries") or []:
+            if isinstance(e, dict) and e.get("id") == entry_id:
+                msg = e.get("message") if isinstance(e.get("message"), dict) else {}
+                if e.get("type") == "message" and msg.get("role") == "user":
+                    break
+                raise HTTPException(422, "entryId is not a user message entry")
+        else:
+            raise HTTPException(422, "unknown entryId")
+        # A fork stops the parent and registers the child: net-zero. Reap dead
+        # sessions first, then discount the parent being replaced, so a fork at
+        # the cap only 429s when it would really add a session.
+        await get_manager().reap_dead()
+        m = get_manager()
+        if len(m.sessions) - (1 if gw_id in m.sessions else 0) >= MAX_SESSIONS:
+            raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
+        old_file = sess.omp_session_file
+        if not old_file:
+            # omp only reports its session file on get_state and
+            # session_info_update events; a fork target always has entries and
+            # therefore a file on disk, so fetch the state once to anchor the
+            # branched-file scan below.
+            with contextlib.suppress(RpcError, ProcessDead):
+                await sess.get_state()
+            old_file = sess.omp_session_file
+        branch_started = time.time()
+        data = await sess.command("branch", entryId=entry_id, timeout=30)
+        if isinstance(data, dict) and data.get("cancelled"):
+            raise RpcError("branch", "cancelled by an extension")
+        new_file = await _branched_file(sess, old_file, data, since=branch_started)
+        # Stop before resuming: omp holds the branched entries in memory and
+        # persists them on exit, so the resume process must start after the old
+        # one has flushed the file (the reverse order reads an empty transcript).
+        with contextlib.suppress(KeyError):
+            await get_manager().stop(gw_id)
+        # The CURRENT model/thinking, not the launch flags: mid-session /model
+        # and /thinking changes must survive the fork.
+        new = await get_manager().create(cwd=sess.cwd,
+                                         model=_model_flag(sess.model) or sess.requested_model,
+                                         thinking=_model_flag(sess.thinking_level) or sess.requested_thinking,
+                                         approval_mode=sess.approval_mode,
+                                         session_file=new_file)
+    # omp returns the branched entry's text ("selectedText"): the fork carries
+    # history strictly BEFORE that message, and clients prefill the composer
+    # with it for a re-send. A root entry produces an empty session instead
+    # (omp links it to the old file via parentSession).
+    text = data.get("text") if isinstance(data, dict) else None
+    return {"gwId": new.gw_id, "forkedFrom": old_file, "text": text if isinstance(text, str) else None}
 
 
 MAX_FILE_ENTRIES = 200
@@ -939,12 +1135,20 @@ async def _reaper() -> None:
 
 @app.on_event("startup")
 async def _startup() -> None:
+    # Create the usage ledger (schema v1) on start; a broken path must not
+    # keep the gateway from booting.
+    with contextlib.suppress(Exception):
+        get_ledger()
     app.state.reaper = asyncio.create_task(_reaper())
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
     await get_manager().shutdown_all()
+    # Close the ledger last; a later get_ledger() reconnects instead of
+    # writing through a closed connection.
+    with contextlib.suppress(Exception):
+        close_ledger()
 
 
 # ------------------------------------------------------------------- static
