@@ -19,6 +19,7 @@
   let model = $state<CatalogModel | null>(null);
   let thinking = $state<ThinkingLevel | ''>('');
   let approval = $state<ApprovalMode>('yolo');
+  let advisor = $state(false);
   let starting = $state(false);
   let error = $state<string | null>(null);
   let pickerOpen = $state(false);
@@ -49,6 +50,7 @@
           ...(model ? { model: model.selector } : {}),
           ...(thinking ? { thinking } : {}),
           approvalMode: approval,
+          ...(advisor ? { advisor: true } : {}),
         },
         (info) => {
           if (draft) saveDraft(info.gwId, draft);
@@ -147,6 +149,11 @@
         <span>Bring over the unsent message from the ended session</span>
       </label>
     {/if}
+
+    <label class="carry" title="omp's advisor runtime passively reviews each turn and injects notes. Applies to this session only.">
+      <input type="checkbox" bind:checked={advisor} />
+      <span>Enable advisor</span>
+    </label>
 
     {#if error}<p class="error" role="alert">{error}</p>{/if}
 

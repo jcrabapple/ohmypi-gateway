@@ -71,6 +71,7 @@ export interface SessionInfo {
   ompSessionName: string | null;
   model: ModelRef | null;
   thinkingLevel: ThinkingLevel | string | null;
+  advisor: boolean;
   isStreaming: boolean;
   idleSec: number;
   exited: boolean;

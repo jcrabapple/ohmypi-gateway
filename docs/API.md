@@ -117,7 +117,7 @@ session is a transcript on disk that can be resumed.
 | Method | Path | |
 |---|---|---|
 | GET | `/sessions?limit=&include_saved=` | `{live: [...], saved: [...]}` |
-| POST | `/sessions` | start: `{cwd?, model?, thinking?, approvalMode?, resumeFrom?}`. `approvalMode` is `yolo` (default) \| `write` \| `always-ask`. `resumeFrom` must be a file under `~/.omp/agent/sessions` (see Resuming below) |
+| POST | `/sessions` | start: `{cwd?, model?, thinking?, approvalMode?, resumeFrom?, advisor?}`. `approvalMode` is `yolo` (default) \| `write` \| `always-ask`. `resumeFrom` must be a file under `~/.omp/agent/sessions` (see Resuming below). `advisor` (default false) launches the child with `--advisor` (omp's advisor runtime); launch-time only — no mid-session toggle, carried through forks |
 | GET | `/sessions/{id}` | session info (below) |
 | DELETE | `/sessions/{id}` | stop the child; transcript stays on disk |
 | POST | `/sessions/{id}/prompt` | `{message, images?, mode?, wait?, timeout?}`. `images` is up to 4 of `{"type":"image","data":"<base64>","mimeType":"image/png"|"image/jpeg"|"image/webp"|"image/gif"}` (max 5 MB decoded each; raw base64 only, no `data:` prefix) and is forwarded to omp on every mode. Bad type, mime, base64, size, or file signature (magic bytes are checked against the claimed mime type) is 422. `message` may be empty when images are present. `mode`: `prompt` \| `steer` (inject into the running turn) \| `follow_up` (queue for after it). Returns immediately with the ack; follow progress on the WebSocket. `wait:true` blocks until the turn ends and adds `lastAssistantText` (see note) |
@@ -173,7 +173,7 @@ one-tap pick, and should treat a missing key (older gateways) as unknown.
   the response is that session's info with HTTP 200 and `"alreadyLive": true`.
 
 Session info fields: `gwId`, `cwd`, `approvalMode`, `resumedFrom`, `ompSessionId`,
-`ompSessionFile`, `ompSessionName`, `model`, `thinkingLevel`, `isStreaming`,
+`ompSessionFile`, `ompSessionName`, `model`, `thinkingLevel`, `advisor` (bool), `isStreaming`,
 `idleSec`, `exited`, `protocolVersion`, `messageCount`, `contextUsage`,
 `lastEventSeq`, `pendingUi`.
 

@@ -8,7 +8,7 @@ import { cleanup, render, settle } from './mount';
 function info(gwId: string): SessionInfo {
   return {
     gwId, cwd: `/work/${gwId}`, approvalMode: 'yolo', resumedFrom: null, ompSessionId: null, ompSessionFile: null,
-    ompSessionName: null, model: null, thinkingLevel: null, isStreaming: false, idleSec: 0, exited: false,
+    ompSessionName: null, model: null, advisor: false, thinkingLevel: null, isStreaming: false, idleSec: 0, exited: false,
     exitCode: null, protocolVersion: null, uptimeSec: 0, subscribers: 0, messageCount: 0,
     contextUsage: null, lastEventSeq: 0, pendingUi: [],
   };
@@ -21,6 +21,22 @@ afterEach(() => {
   reviewed.done = new Set();
   localStorage.clear();
   ui.toasts.forEach((t) => ui.dismissToast(t.id));
+});
+
+describe('SessionHeader advisor indicator', () => {
+  it('hides the advisor chip by default and shows it when the session has advisor on', async () => {
+    active.gwId = 'gw-adv';
+    active.info = info('gw-adv');
+    let { target } = render(SessionHeader, {});
+    expect(target.querySelector('.chip.advisor')).toBeNull();
+    cleanup();
+
+    active.info = { ...info('gw-adv'), advisor: true };
+    ({ target } = render(SessionHeader, {}));
+    const chip = target.querySelector<HTMLElement>('.chip.advisor');
+    expect(chip).not.toBeNull();
+    expect(chip!.textContent).toContain('Advisor');
+  });
 });
 
 describe('SessionHeader review actions', () => {

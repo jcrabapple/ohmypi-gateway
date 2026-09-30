@@ -108,12 +108,14 @@ class OmpSession:
         thinking: str | None = None,
         approval_mode: str = DEFAULT_APPROVAL_MODE,
         session_file: str | None = None,
+        advisor: bool = False,
     ):
         self.gw_id = uuid.uuid4().hex[:12]
         self.cwd = str(Path(cwd).expanduser().resolve())
         self.requested_model = model
         self.requested_thinking = thinking
         self.approval_mode = approval_mode
+        self.advisor = bool(advisor)
         self.resume_session_file = canonical_path(session_file)
 
         self.created_at = time.time()
@@ -208,6 +210,10 @@ class OmpSession:
             args += ["--model", self.requested_model]
         if self.requested_thinking:
             args += ["--thinking", self.requested_thinking]
+        if self.advisor:
+            # Launch-time only in omp (no mid-session RPC toggle): the flag is
+            # set at spawn and carried through forks/resumes.
+            args += ["--advisor"]
         return args
 
     async def start(self, startup_timeout: float = 60.0) -> None:
@@ -687,6 +693,7 @@ class OmpSession:
             "ompSessionName": self.omp_session_name,
             "model": self.model or self.requested_model,
             "thinkingLevel": self.thinking_level or self.requested_thinking,
+            "advisor": self.advisor,
             "isStreaming": self.streaming,
             "idleSec": round(time.time() - self.last_activity, 1),
             "exited": self.exited,
@@ -707,13 +714,15 @@ class SessionManager:
 
     async def create(self, cwd: str, model: str | None = None, thinking: str | None = None,
                      approval_mode: str = DEFAULT_APPROVAL_MODE,
-                     session_file: str | None = None) -> OmpSession:
+                     session_file: str | None = None,
+                     advisor: bool = False) -> OmpSession:
         if not Path(OMP_BIN).exists():
             raise RpcError("create", f"omp binary not found at {OMP_BIN}")
         if not Path(cwd).expanduser().is_dir():
             raise RpcError("create", f"cwd does not exist: {cwd}")
         sess = OmpSession(cwd=cwd, model=model, thinking=thinking,
-                          approval_mode=approval_mode, session_file=session_file)
+                          approval_mode=approval_mode, session_file=session_file,
+                          advisor=advisor)
         await sess.start()
         self.sessions[sess.gw_id] = sess
         with contextlib.suppress(Exception):

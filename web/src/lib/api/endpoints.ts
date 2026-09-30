@@ -21,6 +21,8 @@ export interface NewSession {
   thinking?: ThinkingLevel;
   approvalMode?: ApprovalMode;
   resumeFrom?: string;
+  /** Enable omp's advisor runtime (passively reviews each turn). Launch-time only. */
+  advisor?: boolean;
 }
 
 /** Extra fields on POST /api/sessions: the file was already open, or the saved folder is gone. */

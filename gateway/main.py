@@ -550,6 +550,7 @@ async def create_session(request: Request):
     thinking = body.get("thinking")
     if thinking and thinking not in THINKING_LEVELS:
         raise HTTPException(422, "invalid thinking level")
+    advisor = bool(body.get("advisor", False))
     resume = body.get("resumeFrom")
     if resume:
         rp = Path(resume).expanduser().resolve()
@@ -572,7 +573,7 @@ async def create_session(request: Request):
     cwd = cwd or os.path.expanduser("~/projects")
     sess = await get_manager().create(cwd=cwd, model=body.get("model") or None,
                                       thinking=thinking or None, approval_mode=approval_mode,
-                                      session_file=resume)
+                                      session_file=resume, advisor=advisor)
     return {**sess.info(), **({"cwdFallback": True} if cwd_fallback else {})}
 
 
@@ -802,7 +803,8 @@ async def fork(gw_id: str, request: Request):
                                          model=_model_flag(sess.model) or sess.requested_model,
                                          thinking=_model_flag(sess.thinking_level) or sess.requested_thinking,
                                          approval_mode=sess.approval_mode,
-                                         session_file=new_file)
+                                         session_file=new_file,
+                                         advisor=sess.advisor)
     # omp returns the branched entry's text ("selectedText"): the fork carries
     # history strictly BEFORE that message, and clients prefill the composer
     # with it for a re-send. A root entry produces an empty session instead

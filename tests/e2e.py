@@ -198,6 +198,7 @@ null_titles = [x for x in (lst.get("saved") or []) if x.get("title") is None]
 check("saved-titles-never-null", not null_titles, f"-> {len(null_titles)} null titles")
 gid = sess["gwId"]
 check("spawn", not sess["exited"], f"gw={gid} proto=v{sess['protocolVersion']}")
+check("advisor-default-off", sess["advisor"] is False, f"-> {sess['advisor']!r}")
 led_before = ok("GET", "/api/ledger?days=30")["totals"]["turns"]
 
 try:
@@ -562,6 +563,8 @@ try:
         check("fork-old-session-stopped", req("GET", f"/api/sessions/{fg_fork}")[0] == 404)
         live_ids = [s["gwId"] for s in ok("GET", "/api/sessions?include_saved=false")["live"]]
         check("fork-new-registered", fork_new in live_ids)
+        fi = ok("GET", f"/api/sessions/{fork_new}")
+        check("fork-advisor-default-off", fi.get("advisor") is False, f"-> {fi.get('advisor')!r}")
         branch = ok("GET", f"/api/sessions/{fork_new}/messages")["messages"]
 
         def user_texts(msgs):
@@ -586,6 +589,42 @@ try:
         code, _, _ = req("DELETE", f"/api/sessions/{fork_new}")
         check("fork-new-stops", code == 200)
         fork_new = None
+
+    # Advisor: launch-time only. A session spawned with advisor must pass
+    # --advisor to the omp child (verified via /proc), survive a fork, and
+    # default off everywhere else.
+    adv = ok("POST", "/api/sessions", {"cwd": str(fork_dir), "thinking": "off", "advisor": True})
+    agw = adv["gwId"]
+    check("advisor-on", adv.get("advisor") is True, f"-> {adv.get('advisor')!r}")
+    argv_hit = False
+    for pid_dir in Path("/proc").iterdir():
+        if not pid_dir.name.isdigit():
+            continue
+        try:
+            argv = (pid_dir / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if b"--advisor" in argv and agw and b"--cwd" in argv:
+            argv_hit = True
+            break
+    check("advisor-flag-in-argv", argv_hit, "no omp child carries --advisor")
+    try:
+        ok("POST", f"/api/sessions/{agw}/prompt",
+           {"message": "Reply with exactly: adv-probe", "mode": "prompt", "wait": True})
+        ausers = [e for e in ok("GET", f"/api/sessions/{agw}/entries")["entries"] if e.get("role") == "user"]
+        if ausers:
+            code, data, _ = req("POST", f"/api/sessions/{agw}/fork", {"entryId": ausers[0]["entryId"]})
+            fork_adv = (data or {}).get("gwId") if code == 200 else None
+            if fork_adv:
+                check("fork-advisor-carried",
+                      ok("GET", f"/api/sessions/{fork_adv}").get("advisor") is True,
+                      "forked session lost advisor")
+                ok("DELETE", f"/api/sessions/{fork_adv}")
+    finally:
+        # A fork stops the parent, so the advisor source is often already gone.
+        code, _, _ = req("DELETE", f"/api/sessions/{agw}")
+        if code not in (200, 404):
+            check("advisor-session-cleanup", False, f"DELETE -> {code}")
 finally:
     req("DELETE", f"/api/sessions/{fg_fork}")
     if fork_new:

@@ -187,6 +187,12 @@
         <span class="cwd mono truncate" title={info.cwd}>{folder}</span>
       {/if}
       {#if model}<span class="chip model truncate" title={info.model?.id}>{model}</span>{/if}
+      {#if info.advisor}
+        <span class="chip advisor" title="Advisor runtime enabled for this session (reviews each turn and injects notes)">
+          <Icon name="sparkle" size={13} />
+          Advisor
+        </span>
+      {/if}
       {#if flagged && !active.running}
         <button type="button" class="done" onclick={markDone}>
           <Icon name="check" size={14} />
@@ -324,6 +330,15 @@
     padding: 0 var(--s-2);
     box-shadow: var(--ring);
     min-height: 22px;
+  }
+  .chip.advisor {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    padding: 0 var(--s-2);
+    min-height: 22px;
+    box-shadow: var(--ring);
+    color: var(--accent);
   }
   button.done {
     display: inline-flex;
