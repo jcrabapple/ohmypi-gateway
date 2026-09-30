@@ -3,8 +3,8 @@
 import { api, resetSignedOut } from './client';
 import type {
   ApprovalMode, CatalogModels, CommandsResponse, EventsResponse, MessagesResponse,
-  SavedSession, SessionInfo, SessionsList, SessionState, SessionStats, SystemInfo,
-  ThinkingLevel, UiAnswer, UiRequest,
+  SavedSession, SessionInfo, SessionsList, SessionState, SessionStats, SubagentMessagesResponse,
+  SystemInfo, ThinkingLevel, UiAnswer, UiRequest,
 } from './types';
 
 export type PromptMode = 'prompt' | 'steer' | 'follow_up';
@@ -86,4 +86,14 @@ export const sessions = {
   rename: (id: string, name: string) => api<unknown>(`${sid(id)}/name`, { method: POST, body: { name } }),
   answerUi: (id: string, requestId: string, answer: UiAnswer) =>
     api<unknown>(`${sid(id)}/ui/${encodeURIComponent(requestId)}`, { method: POST, body: answer }),
+
+  /** Registry snapshot; shape is omp's, parsed leniently by the subagent store. */
+  subagents: {
+    list: (id: string, signal?: AbortSignal) => api<unknown>(`${sid(id)}/subagents`, { signal }),
+    messages: (id: string, subId: string, fromByte?: number, signal?: AbortSignal) =>
+      api<SubagentMessagesResponse>(
+        `${sid(id)}/subagents/${encodeURIComponent(subId)}/messages${fromByte != null ? `?from=${fromByte}` : ''}`,
+        { signal },
+      ),
+  },
 };

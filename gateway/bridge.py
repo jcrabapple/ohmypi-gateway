@@ -136,6 +136,9 @@ class OmpSession:
 
         self._turn_waiters: list[asyncio.Future] = []
         self._negotiation: asyncio.Task | None = None
+        # Keep a reference: asyncio only keeps weak refs to tasks, an unreferenced
+        # one can be garbage-collected mid-flight.
+        self._subagent_sub: asyncio.Task | None = None
         # Dialog-style extension UI requests (tool approvals, questions) omp is
         # blocked on. Tracked so late-joining and REST-only clients can see and
         # answer them. First answer wins.
@@ -160,8 +163,20 @@ class OmpSession:
             data = await self.command("negotiate_protocol", protocolVersion=2, timeout=15)
             if isinstance(data, dict) and data.get("protocolVersion") == 2:
                 self.protocol_version = 2
+                # The subagent panel needs progress frames and omp defaults the
+                # subscription to off. Fire and forget on its own task: older omp
+                # builds reject the command and should keep working either way.
+                self._subagent_sub = asyncio.get_running_loop().create_task(
+                    self._subscribe_subagents())
         except (RpcError, ProcessDead):
             log.warning("[%s] v2 negotiation failed, staying on v1", self.gw_id)
+
+    async def _subscribe_subagents(self) -> None:
+        """progress level: lifecycle + current tool + tokens/cost, no text deltas."""
+        try:
+            await self.command("set_subagent_subscription", level="progress", timeout=15)
+        except (RpcError, ProcessDead) as e:
+            log.info("[%s] subagent subscription unavailable: %s", self.gw_id, e)
 
     def _build_args(self) -> list[str]:
         # No --no-ui: the gateway is a real UI host. Dialogs (tool approvals in

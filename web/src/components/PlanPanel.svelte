@@ -1,14 +1,20 @@
 <script lang="ts">
   import type { TodoTask } from '../lib/api/types';
   import type { ToolItem } from '../lib/transcript/types';
-  import { active, plan } from '../lib/state';
+  import { active, plan, subagents } from '../lib/state';
   import { Icon, Spinner } from '../lib/ui';
+  import SubagentPanel from './SubagentPanel.svelte';
 
-  type Tab = 'plan' | 'activity';
+  type Tab = 'plan' | 'activity' | 'agents';
 
   let tab = $state<Tab>('plan');
-  // The Plan tab is disabled without a plan, so the pane follows.
-  const shown = $derived(plan.hasPlan ? tab : 'activity');
+  // Disabled tabs must not own the pane: no plan falls back to activity, and a roster
+  // that just emptied (session switch) falls back too.
+  const shown = $derived(
+    tab === 'plan' && !plan.hasPlan ? 'activity'
+      : tab === 'agents' && !subagents.hasAny ? 'activity'
+      : tab,
+  );
   const running = $derived(
     active.transcript.items.filter((i): i is ToolItem => i.kind === 'tool' && i.status === 'running'),
   );
@@ -29,7 +35,7 @@
 </script>
 
 <div class="panel">
-  <div class="tabs" role="tablist" aria-label="Session plan">
+  <div class="tabs" role="tablist" aria-label="Session panels">
     <button
       type="button"
       role="tab"
@@ -53,6 +59,19 @@
       onclick={() => (tab = 'activity')}
     >
       Activity
+    </button>
+    <button
+      type="button"
+      role="tab"
+      id="plan-tab-agents"
+      aria-controls="plan-pane-agents"
+      aria-selected={shown === 'agents'}
+      aria-disabled={!subagents.hasAny}
+      tabindex={shown === 'agents' ? 0 : -1}
+      disabled={!subagents.hasAny}
+      onclick={() => (tab = 'agents')}
+    >
+      Agents <span class="mono frac">{subagents.total}</span>
     </button>
   </div>
 
@@ -117,6 +136,8 @@
         </section>
       {/each}
     </div>
+  {:else if shown === 'agents'}
+    <SubagentPanel />
   {:else}
     <div class="pane" role="tabpanel" id="plan-pane-activity" aria-labelledby="plan-tab-activity">
       {#if running.length === 0}

@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -606,6 +606,30 @@ async def state(gw_id: str):
 @app.get("/api/sessions/{gw_id}/messages")
 async def messages(gw_id: str):
     return await get_session_or_404(gw_id).messages()
+
+
+@app.get("/api/sessions/{gw_id}/subagents")
+async def subagents(gw_id: str):
+    """Registry snapshot for the subagent panel. Empty until omp spawns one."""
+    return await get_session_or_404(gw_id).command("get_subagents", timeout=30)
+
+
+@app.get("/api/sessions/{gw_id}/subagents/{sub_id}/messages")
+async def subagent_messages(gw_id: str, sub_id: str, from_: int | None = Query(None, alias="from", ge=0)):
+    """Read-only transcript of one subagent, incremental via nextByte.
+
+    Unknown subagent ids surface as an omp RpcError, which the handler maps to 400.
+    """
+    data = await get_session_or_404(gw_id).command(
+        "get_subagent_messages", subagentId=sub_id, timeout=30,
+        **({"fromByte": from_} if from_ is not None else {}))
+    if not isinstance(data, dict):
+        data = {}
+    msgs = data.get("messages")
+    if msgs is None:
+        msgs = data.get("entries") or []
+    return {"messages": msgs, "nextByte": data.get("nextByte"),
+            "reset": bool(data.get("reset")), "sessionFile": data.get("sessionFile")}
 
 
 @app.post("/api/sessions/{gw_id}/model")

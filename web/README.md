@@ -196,3 +196,22 @@ names redacted and long strings trimmed. Regenerate with
 - **Icons.** `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` and `apple-touch-icon.png` were
   generated once from `static/icon.svg` with ImageMagick (`magick`) and are committed. They are not
   rebuilt by `bun run build`. The maskable icon keeps the glyph inside the safe zone.
+
+## Phase 3 A: subagent panel
+
+- The gateway subscribes every live session to `set_subagent_subscription: "progress"` right after
+  v2 negotiation (fire-and-forget in `bridge.py`; older omp builds that reject the command keep
+  working). The `subagent_progress` / `subagent_lifecycle` frames then flow through the normal WS
+  event stream; no bridge forwarding was needed.
+- `lib/state/subagents.svelte.ts` folds frames into rows keyed by `progress.id` (fallback `#index`
+  for early frames without an id), keeps last-known status, sorts by index, and clears on session
+  switch (`active.close()`). On open, `active.seedSubagents()` hydrates the roster from
+  `GET /api/sessions/{id}/subagents` because events older than `lastEventSeq` are never replayed.
+  Parsing is lenient everywhere: fields are pulled only after `typeof` checks, junk entries are
+  skipped, and a frame that is missing fields just updates less.
+- `SubagentPanel.svelte` is the third tab ("Agents n") in the right panel beside Plan/Activity,
+  disabled until a subagent has been seen. Rows show agent name, task/assignment line (truncated,
+  full text in `title`), status glyph (spinner / check / x / dash), `currentTool` while running,
+  tokens + cost, model, and a `attempt/max` retry badge. Clicking a row opens a Sheet that fetches
+  `GET .../subagents/{sid}/messages` and renders the transcript with the standard item components,
+  with a "Load more" button while `nextByte` is present.

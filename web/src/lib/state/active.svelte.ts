@@ -19,6 +19,7 @@ import { hasActiveTodo } from './plan';
 import { plan } from './plan.svelte';
 import { reviewed } from './reviewed.svelte';
 import { sessionsStore } from './sessions.svelte';
+import { subagents } from './subagents.svelte';
 
 export type Phase = 'idle' | 'loading' | 'ready' | 'gone' | 'error';
 
@@ -73,6 +74,9 @@ class ActiveSession {
       void this.loadCommands();
       void this.refreshStats();
       void this.refreshQueued();
+      // Frames are not replayed for events older than lastEventSeq, so the roster
+      // seeds from the registry snapshot; it stays empty when omp has none.
+      void this.seedSubagents(gwId);
     } catch (e) {
       if (gen !== this.generation) return;
       const status = (e as { status?: number }).status;
@@ -103,6 +107,7 @@ class ActiveSession {
     // Also runs on open() of a different session, since open() closes first. Without this the
     // narrow-screen plan sheet survives the switch and shows the previous session's plan.
     plan.reset();
+    subagents.clear();
   }
 
   reconnect(): void {
@@ -220,6 +225,16 @@ class ActiveSession {
     }
   }
 
+  /** Registry snapshot into the subagent roster; best effort, frames are the live path. */
+  private async seedSubagents(gwId: string): Promise<void> {
+    try {
+      const data = await api.subagents.list(gwId);
+      if (this.gwId === gwId) subagents.seed(data);
+    } catch {
+      /* the panel starts empty instead */
+    }
+  }
+
   /** Forget the cached transcript, e.g. after the session was stopped for good. */
   async forgetCache(gwId: string): Promise<void> {
     await idbDelete(cacheKey('messages', gwId));
@@ -330,6 +345,8 @@ class ActiveSession {
     } else if (event.type === 'available_commands_update') {
       const commands = (event as { commands?: SlashCommand[] }).commands;
       if (Array.isArray(commands)) this.commands = commands;
+    } else if (event.type === 'subagent_progress' || event.type === 'subagent_lifecycle') {
+      subagents.feed(event);
     } else if (event.type === 'extension_ui_request' && isBlockingUi(event as { method: string })) {
       const req = event as UiRequest;
       notify({ title: 'omp needs you', body: (req.title ?? '').split('\n', 1)[0], tag: `ui:${req.id}` });

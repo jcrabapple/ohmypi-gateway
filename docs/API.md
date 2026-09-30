@@ -107,6 +107,8 @@ session is a transcript on disk that can be resumed.
 | POST | `/sessions/{id}/compact` | `{instructions?}` |
 | GET | `/sessions/{id}/state` | omp state, minus the system prompt and tool dumps |
 | GET | `/sessions/{id}/messages` | full transcript (omp message objects) |
+| GET | `/sessions/{id}/subagents` | subagent registry snapshot from omp `get_subagents` (`{"subagents": [...]}`; empty until omp spawns one). The gateway subscribes every live session at `progress` level after v2 negotiation, so `subagent_progress` / `subagent_lifecycle` events flow on the WebSocket |
+| GET | `/sessions/{id}/subagents/{sid}/messages?from=` | one subagent's transcript via omp `get_subagent_messages` (`subagentId`, `fromByte`): `{messages, nextByte, reset, sessionFile}`. Page forward with `from=<nextByte>` while `nextByte` is present. Unknown `sid` is an omp command error → 400 |
 | GET | `/sessions/{id}/stats` | token/cost stats |
 | POST | `/sessions/{id}/model` | `{provider, modelId}` (both required; values from `/catalog/models`) |
 | POST | `/sessions/{id}/thinking` | `{level}`: off, minimal, low, medium, high, xhigh, max |

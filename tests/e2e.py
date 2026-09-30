@@ -231,6 +231,15 @@ try:
     check("events-gap-false-at-cursor", ok("GET", f"/api/sessions/{gid}/events?after={ev['lastSeq']}")["gap"] is False)
     check("events-gap-after-future-cursor", ok("GET", f"/api/sessions/{gid}/events?after={ev['lastSeq'] + 50}")["gap"] is False)
     check("session-stats", ok("GET", f"/api/sessions/{gid}/stats")["data"] is not None)
+    sub = ok("GET", f"/api/sessions/{gid}/subagents")
+    check("subagents-registry", isinstance(sub, (list, dict)),
+          "list" if isinstance(sub, list) else f"keys={sorted(sub)[:4]}")
+    code, _, _ = req("GET", f"/api/sessions/{gid}/subagents", token=None)
+    check("subagents-needs-auth", code == 401)
+    # An unknown subagent id is an omp-level command error: RpcError maps to 400,
+    # never a leaked 500.
+    code, data, _ = req("GET", f"/api/sessions/{gid}/subagents/no-such-agent/messages")
+    check("subagent-messages-unknown-4xx", code in (400, 404, 422), f"-> {code}")
     check("set-thinking", ok("POST", f"/api/sessions/{gid}/thinking", {"level": "low"}) is not None)
     ok("POST", f"/api/sessions/{gid}/name", {"name": "e2e probe"})
     check("rename", ok("GET", f"/api/sessions/{gid}")["ompSessionName"] == "e2e probe")

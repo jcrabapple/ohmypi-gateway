@@ -266,6 +266,84 @@ export interface MessagesResponse {
   totalMessages: number;
 }
 
+// ----------------------------------------------------------------- subagents
+
+export type SubagentStatus = 'pending' | 'running' | 'completed' | 'failed' | 'aborted';
+
+export interface SubagentRetryState {
+  attempt?: number;
+  maxAttempts?: number;
+  delayMs?: number;
+  errorMessage?: string;
+  startedAtMs?: number;
+}
+
+/** `payload.progress` of a subagent_progress frame; mirrors omp's AgentProgress. Every
+ *  field is optional on purpose: omp adds fields freely and early frames are sparse. */
+export interface SubagentProgressInfo {
+  id?: string;
+  index?: number;
+  agent?: string;
+  status?: SubagentStatus;
+  task?: string;
+  assignment?: string;
+  currentTool?: string;
+  currentToolArgs?: string;
+  currentToolStartMs?: number;
+  recentTools?: unknown[];
+  recentOutput?: unknown[];
+  toolCount?: number;
+  requests?: number;
+  tokens?: number;
+  contextTokens?: number;
+  contextWindow?: number;
+  cost?: number;
+  durationMs?: number;
+  modelOverride?: string;
+  modelRole?: string;
+  resolvedModel?: string;
+  resolvedThinkingLevel?: string;
+  retryState?: SubagentRetryState;
+  lastIntent?: string;
+}
+
+/** `payload` of a subagent_progress frame. `payload.id` is absent on early frames;
+ *  the identity lives in `progress.id`. */
+export interface SubagentProgressFrame {
+  id?: string;
+  index?: number;
+  agent?: string;
+  agentSource?: string;
+  task?: string;
+  assignment?: string;
+  parentToolCallId?: string;
+  detached?: boolean;
+  sessionFile?: string;
+  progress?: SubagentProgressInfo;
+}
+
+/** `payload` of a subagent_lifecycle frame. `started` maps to running; the running
+ *  status itself lives in progress frames. */
+export interface SubagentLifecycleInfo {
+  id: string;
+  agent?: string;
+  agentSource?: string;
+  parentToolCallId?: string;
+  detached?: boolean;
+  description?: string;
+  status: 'started' | 'completed' | 'failed' | 'aborted';
+  sessionFile?: string;
+  index?: number;
+}
+
+/** GET /sessions/{id}/subagents/{sid}/messages */
+export interface SubagentMessagesResponse {
+  messages: OmpMessage[];
+  nextByte?: number | null;
+  reset?: boolean;
+  sessionFile?: string | null;
+}
+
 // -------------------------------------------------------------------- events
 
 export type AssistantMessageEventType =
@@ -348,6 +426,8 @@ export type OmpEvent =
       attempt?: number; maxAttempts?: number; delayMs?: number; errorMessage?: string;
     })
   | (Ev<'auto_retry_end'> & { success?: boolean; attempt?: number; finalError?: string })
+  | (Ev<'subagent_progress'> & { payload?: SubagentProgressFrame })
+  | (Ev<'subagent_lifecycle'> & { payload?: SubagentLifecycleInfo })
   | (Ev<'model_changed'> & { model?: ModelRef | string })
   | (Ev<'thinking_level_changed'> & { level?: string; thinkingLevel?: string })
   | (Ev<'notice'> & { message?: string; text?: string; level?: string })
