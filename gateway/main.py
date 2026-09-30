@@ -615,6 +615,73 @@ async def messages(gw_id: str):
     return await get_session_or_404(gw_id).messages()
 
 
+MAX_FILE_ENTRIES = 200
+
+
+def _reject_prefix(prefix: str) -> str | None:
+    """Prefix problems that are rejected outright, before any path math."""
+    if "\x00" in prefix:
+        return "prefix contains a null byte"
+    if prefix.startswith(("/", "\\")) or (len(prefix) >= 2 and prefix[1] == ":"):
+        return "prefix must be relative to the session directory"
+    # Split on both separators: a backslash is a legal filename character on
+    # POSIX, so "sub\..\secret" must be rejected outright, never resolved.
+    if any(part == ".." for part in re.split(r"[/\\]", prefix)):
+        return "prefix must not contain '..'"
+    return None
+
+
+@app.get("/api/sessions/{gw_id}/files")
+async def session_files(gw_id: str, prefix: str = ""):
+    """Index-only listing of ONE directory level of the session cwd, for
+    @-file mentions. Names and sizes only; file contents are never served.
+    Dotfiles are excluded, entries are dirs-first then name, capped at 200.
+    The requested path must resolve inside the session's real cwd: absolute
+    prefixes and '..' segments are 422 outright, a symlink whose target leaves
+    the cwd is 403, an unresolvable prefix (name too long, symlink loop) is
+    422, and an unknown path is 404."""
+    sess = get_session_or_404(gw_id)
+    bad = _reject_prefix(prefix)
+    if bad:
+        raise HTTPException(422, bad)
+    parts = [p for p in prefix.split("/") if p not in ("", ".")]
+    entries: list[dict] = []
+    try:
+        cwd_real = os.path.realpath(sess.cwd)
+        target = os.path.realpath(os.path.join(cwd_real, *parts)) if parts else cwd_real
+        # is_relative_to also covers cwd == "/" (a startswith(cwd + os.sep)
+        # test builds "//" there and rejects every child).
+        if not Path(target).is_relative_to(Path(cwd_real)):
+            raise HTTPException(403, "path escapes the session directory")
+        rel_prefix = "/".join(parts)
+        for de in os.scandir(target):
+            if de.name.startswith("."):
+                continue
+            try:
+                is_dir = de.is_dir()
+                size = None if is_dir else de.stat().st_size
+            except OSError:
+                continue  # vanished (or dangling link) mid-scan; skip, don't 500
+            entries.append({
+                "name": de.name,
+                "path": f"{rel_prefix}/{de.name}" if rel_prefix else de.name,
+                "isDir": is_dir,
+                "size": size,
+            })
+    except FileNotFoundError:
+        raise HTTPException(404, "no such directory") from None
+    except NotADirectoryError:
+        raise HTTPException(422, "prefix is not a directory") from None
+    except PermissionError:
+        raise HTTPException(403, "directory is not readable") from None
+    except OSError:
+        # ENAMETOOLONG, ELOOP and friends: the prefix cannot be resolved or
+        # listed on this filesystem, never a 500.
+        raise HTTPException(422, "directory cannot be listed") from None
+    entries.sort(key=lambda e: (not e["isDir"], e["name"]))
+    return {"entries": entries[:MAX_FILE_ENTRIES]}
+
+
 @app.get("/api/sessions/{gw_id}/subagents")
 async def subagents(gw_id: str):
     """Registry snapshot for the subagent panel. Empty until omp spawns one."""

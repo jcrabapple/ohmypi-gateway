@@ -100,6 +100,20 @@ export interface SessionsList {
   saved: SavedSession[];
 }
 
+/** GET /sessions/{id}/files?prefix= : one entry of the index-only cwd listing. */
+export interface FileIndexEntry {
+  name: string;
+  /** Relative to the session cwd, forward slashes. */
+  path: string;
+  isDir: boolean;
+  /** Files only; directories report null. */
+  size: number | null;
+}
+
+export interface FilesResponse {
+  entries: FileIndexEntry[];
+}
+
 export type SlashSource = 'builtin' | 'skill' | 'extension' | 'custom' | 'file';
 
 export interface SlashCommand {

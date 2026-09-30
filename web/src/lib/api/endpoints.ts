@@ -2,9 +2,9 @@
 // no caching. Stores decide what to do with the results.
 import { api, resetSignedOut } from './client';
 import type {
-  ApprovalMode, CatalogModels, CommandsResponse, EventsResponse, MessagesResponse,
-  SavedSession, SessionInfo, SessionsList, SessionState, SessionStats, SubagentMessagesResponse,
-  SystemInfo, ThinkingLevel, UiAnswer, UiRequest,
+  ApprovalMode, CatalogModels, CommandsResponse, EventsResponse, FileIndexEntry, FilesResponse,
+  MessagesResponse, SavedSession, SessionInfo, SessionsList, SessionState, SessionStats,
+  SubagentMessagesResponse, SystemInfo, ThinkingLevel, UiAnswer, UiRequest,
 } from './types';
 
 export type PromptMode = 'prompt' | 'steer' | 'follow_up';
@@ -98,3 +98,9 @@ export const sessions = {
       ),
   },
 };
+
+/** Index-only listing of ONE directory of the session cwd (for @-mentions).
+ *  Rejects escapes at the gateway; any ApiError here means "no suggestions". */
+export function sessionFiles(id: string, prefix: string, signal?: AbortSignal): Promise<FileIndexEntry[]> {
+  return api<FilesResponse>(`${sid(id)}/files?prefix=${encodeURIComponent(prefix)}`, { signal }).then((r) => r.entries);
+}

@@ -397,6 +397,77 @@ finally:
         req("DELETE", f"/api/sessions/{lid}")
     shutil.rmtree(probe_dir, ignore_errors=True)
 
+# --------------------------------------------------- file index (@-mentions)
+
+fdir = Path(tempfile.mkdtemp(prefix="ompgw-files-", dir="/tmp")).resolve()
+(fdir / "beta").mkdir()
+(fdir / "beta" / "gamma.md").write_text("drill")
+(fdir / "alpha.txt").write_text("a")
+(fdir / ".hidden").write_text("h")
+many = fdir / "many"
+many.mkdir()
+for i in range(205):
+    (many / f"f{i:03d}.txt").write_text("x")
+f_sess = ok("POST", "/api/sessions", {"cwd": str(fdir), "thinking": "off"})
+fg = f_sess["gwId"]
+try:
+    code, _, _ = req("GET", f"/api/sessions/{fg}/files", token=None)
+    check("files-needs-auth", code == 401)
+    code, _, _ = req("GET", "/api/sessions/e2e-no-such-gw/files")
+    check("files-unknown-session-404", code == 404)
+    code, data, _ = req("GET", f"/api/sessions/{fg}/files")
+    ents = data.get("entries") if isinstance(data, dict) else None
+    check("files-listing-200", code == 200 and isinstance(ents, list), f"-> {code}")
+    check("files-entry-shape", bool(ents) and all(
+        set(e) == {"name", "path", "isDir", "size"} for e in ents), str(ents and ents[0]))
+    names = [e["name"] for e in ents]
+    check("files-dirs-first", names[:2] == ["beta", "many"] and ents[0]["isDir"], str(names))
+    check("files-dotfiles-excluded", ".hidden" not in names, str(names))
+    alpha = next((e for e in ents if e["name"] == "alpha.txt"), None)
+    check("files-file-entry", bool(alpha) and alpha["path"] == "alpha.txt"
+          and alpha["isDir"] is False and alpha["size"] == 1, str(alpha))
+    code, data, _ = req("GET", f"/api/sessions/{fg}/files?prefix=beta")
+    check("files-drill", code == 200 and [e["path"] for e in data["entries"]] == ["beta/gamma.md"],
+          str(data and data.get("entries")))
+    # Traversal dies with exact statuses: 422 for '..' and absolute prefixes
+    # (rejected before any path math), 403 only for realpath escapes such as
+    # a symlink that resolves outside the cwd.
+    for probe, label, want in (("../", "dotdot", 422), ("beta/../../", "nested-dotdot", 422),
+                               ("%2e%2e%2f", "encoded-dotdot", 422), ("beta/..%2f", "encoded-nested", 422),
+                               ("/etc", "absolute", 422), ("C:/windows", "drive", 422),
+                               ("a" * 300, "name-too-long", 422),
+                               ("sub%5C..%5Csecret", "backslash-dotdot", 422)):
+        code, data, _ = req("GET", f"/api/sessions/{fg}/files?prefix={probe}")
+        check(f"files-traversal-{label}", code == want and not (data or {}).get("entries"), f"-> {code}")
+    # A symlink inside the session cwd whose target leaves it: 403.
+    esc = fdir / "symlink-escape"
+    os.symlink("/etc", esc)
+    try:
+        code, data, _ = req("GET", f"/api/sessions/{fg}/files?prefix=symlink-escape")
+        check("files-symlink-escape-403", code == 403 and not (data or {}).get("entries"), f"-> {code}")
+    finally:
+        esc.unlink(missing_ok=True)
+    # A session with cwd "/": containment must still allow real children.
+    root = ok("POST", "/api/sessions", {"cwd": "/", "thinking": "off"})
+    try:
+        code, data, _ = req("GET", f"/api/sessions/{root['gwId']}/files?prefix=tmp")
+        ents = data.get("entries") if isinstance(data, dict) else None
+        check("files-root-cwd-child-200", code == 200 and isinstance(ents, list) and bool(ents)
+              and all(e.get("path", "").startswith("tmp/") for e in ents), f"-> {code}")
+    finally:
+        req("DELETE", f"/api/sessions/{root['gwId']}")
+    code, _, _ = req("GET", f"/api/sessions/{fg}/files?prefix=../", token=None)
+    check("files-traversal-anon-4xx", code in (401, 403, 422), f"-> {code}")
+    code, data, _ = req("GET", f"/api/sessions/{fg}/files?prefix=many")
+    check("files-cap-200", code == 200 and len(data["entries"]) == 200, f"{len(data['entries'])}")
+    code, _, _ = req("GET", f"/api/sessions/{fg}/files?prefix=alpha.txt")
+    check("files-prefix-is-file-422", code == 422, f"-> {code}")
+    code, _, _ = req("GET", f"/api/sessions/{fg}/files?prefix=does-not-exist")
+    check("files-missing-404", code == 404, f"-> {code}")
+finally:
+    req("DELETE", f"/api/sessions/{fg}")
+    shutil.rmtree(fdir, ignore_errors=True)
+
 check("stop-reaped", all(s["gwId"] != gid for s in ok("GET", "/api/sessions?include_saved=false")["live"]))
 
 print(f"\n{BASE}: " + ("all green" if not failures else f"FAILURES: {failures}"))

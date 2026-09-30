@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../client';
-import { sessions } from '../endpoints';
+import { sessionFiles, sessions } from '../endpoints';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -26,5 +26,23 @@ describe('sessions.retry', () => {
     const err = await sessions.retry('g1').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err).toMatchObject({ status: 400, message: 'nothing to retry', code: 'invalid' });
+  });
+});
+
+describe('sessionFiles', () => {
+  it('GETs the files route with the prefix encoded and returns the entries', async () => {
+    const entry = { name: 'a.txt', path: 'src/a.txt', isDir: false, size: 1 };
+    const fetchMock = vi.fn(async () => jsonResponse(200, { entries: [entry] }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(sessionFiles('g1', 'src/sub')).resolves.toEqual([entry]);
+    const called = new URL((fetchMock.mock.calls[0] as unknown as [string])[0]!);
+    expect(called.pathname + called.search).toBe('/api/sessions/g1/files?prefix=src%2Fsub');
+  });
+
+  it('lets the caller see refusal statuses (confinement is not silently swallowed)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, { error: 'path escapes the session directory' })));
+    const err = await sessionFiles('g1', '../').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 403 });
   });
 });

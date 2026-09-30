@@ -1,13 +1,17 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import type { PromptMode } from '../lib/api/endpoints';
+  import { isAbortError } from '../lib/api/client';
+  import { sessionFiles } from '../lib/api/endpoints';
+  import type { FileIndexEntry } from '../lib/api/types';
+  import { atDirPrefix, extractAtQuery, insertMention, rankEntries } from '../lib/composer/atQuery';
   import { clearDraft, loadDraft, saveDraft } from '../lib/composer/drafts';
   import { IMAGE_ACCEPT, imageProblem, isImageType, toPromptImage } from '../lib/composer/images';
   import { modeForKey, sendPlan } from '../lib/composer/send';
   import { filterCommands, flattenGroups, slashQuery, slashText, wantsInput, type SlashMatch } from '../lib/composer/slash';
   import { lastTurnFailure } from '../lib/transcript/reducer';
   import { active, ui } from '../lib/state';
-  import { Icon, Kbd } from '../lib/ui';
+  import { Icon, Kbd, Sheet, Spinner } from '../lib/ui';
   import { scrollFade } from '../lib/ui/actions';
   import { viewport } from '../lib/ui/media.svelte';
   import ComposerChips from './ComposerChips.svelte';
@@ -43,6 +47,173 @@
   const flat = $derived(flattenGroups(groups));
   const menuOpen = $derived(flat.length > 0);
   const selected = $derived(Math.min(sel, Math.max(0, flat.length - 1)));
+
+  // ---- @-file mentions: the query lives between the last trigger and the caret
+  const AT_LIMIT = 8;
+  const AT_CACHE_MAX = 40;
+
+  let caret = $state(0);
+  let atEntries = $state.raw<FileIndexEntry[]>([]);
+  let atSel = $state(0);
+  let atNote = $state<string | null>(null);
+  let atLoaded = $state(false);
+  /** Full draft text whose @-menu was dismissed or picked away. Reset by the
+   * next input event: retyping (or pasting over) the same words rebuilds the
+   * token and re-opens, even when the resulting text is identical. */
+  let atDismissedFor = $state<string | null>(null);
+  /** Sheet variant only: directory being listed ('' = the cwd). */
+  let sheetDrill = $state<string | null>(null);
+  /** Listings live one @-interaction: omp creates files as it works, so a
+   * new directory, a new cwd, or a send drops the cache. Revisiting a
+   * directory while the same token stays open may show that token's earlier
+   * listing; that is the accepted staleness window within a turn. */
+  const fileCache = new Map<string, FileIndexEntry[]>();
+  let fetchCtl: AbortController | null = null;
+  let fetchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const at = $derived(ended ? null : extractAtQuery(text.slice(0, caret)));
+  const atOpen = $derived(at !== null && atDismissedFor !== text);
+  /** Touch paths and narrow windows get the bottom sheet, not the popover. */
+  const atSheet = $derived(viewport.narrow || viewport.coarse);
+  /** Directory to list: the sheet's drill state wins while it is open. */
+  const atPrefix = $derived.by(() => {
+    if (!atOpen || at === null) return null;
+    if (atSheet && sheetDrill !== null) return sheetDrill;
+    return atDirPrefix(at.query);
+  });
+  const atList = $derived.by(() => {
+    if (!atOpen || at === null) return [];
+    const q = atSheet && sheetDrill !== null ? '' : at.query;
+    return rankEntries(atEntries, q).slice(0, AT_LIMIT);
+  });
+  const atActive = $derived(Math.min(atSel, Math.max(0, atList.length - 1)));
+  const sheetTitle = $derived(!sheetDrill ? 'Files' : sheetDrill);
+  /** The popover listbox exists only when it has rows or a note; the sheet
+   * variant is a plain list of buttons and claims no listbox relationship. */
+  const atBoxOpen = $derived(atOpen && !atSheet && (atList.length > 0 || atNote !== null));
+
+  $effect(() => {
+    void at?.query;
+    void atPrefix;
+    atSel = 0;
+  });
+
+  // Drop the cache when the at-token moves to a different directory, so
+  // coming back to a directory in a later token re-lists it fresh.
+  let atPrevDir: string | null = null;
+  $effect(() => {
+    const dir = at === null ? null : atDirPrefix(at.query);
+    if (dir !== atPrevDir) {
+      atPrevDir = dir;
+      if (dir !== null) fileCache.clear();
+    }
+  });
+
+  // One listing per (session, cwd, directory), debounced; a hit renders
+  // instantly and an in-flight request is aborted when the prefix changes.
+  $effect(() => {
+    const prefix = atPrefix;
+    atLoaded = false;
+    if (prefix === null) {
+      atEntries = [];
+      atNote = null;
+      return;
+    }
+    const key = `${gwId}\u0000${active.info?.cwd ?? ''}\u0000${prefix}`;
+    const cached = fileCache.get(key);
+    if (cached) {
+      atEntries = cached;
+      atNote = null;
+      atLoaded = true;
+      return;
+    }
+    atEntries = [];
+    atNote = null;
+    const ctl = new AbortController();
+    fetchCtl = ctl;
+    fetchTimer = setTimeout(() => {
+      sessionFiles(gwId, prefix, ctl.signal)
+        .then((entries) => {
+          if (fileCache.size >= AT_CACHE_MAX) fileCache.delete(fileCache.keys().next().value!);
+          fileCache.set(key, entries);
+          if (fetchCtl !== ctl) return;
+          atEntries = entries;
+          atNote = null;
+          atLoaded = true;
+        })
+        .catch((e: unknown) => {
+          // Confinement rejections and dead sessions are a quiet note, never a toast.
+          if (fetchCtl !== ctl || isAbortError(e)) return;
+          atEntries = [];
+          atNote = 'File list unavailable';
+          atLoaded = true;
+        });
+    }, 150);
+    return () => {
+      if (fetchTimer !== null) clearTimeout(fetchTimer);
+      fetchTimer = null;
+      ctl.abort();
+      if (fetchCtl === ctl) fetchCtl = null;
+    };
+  });
+
+  function trackCaret() {
+    caret = el?.selectionStart ?? text.length;
+  }
+
+  function dismissAt() {
+    atDismissedFor = text;
+    sheetDrill = null;
+  }
+
+  /** Any edit rebuilds the @-token, so a dismissal never survives an input. */
+  function atInput() {
+    atDismissedFor = null;
+    trackCaret();
+  }
+
+  /** Replace the @query token with the picked path (quoted when it has spaces). */
+  function pickAt(entry: FileIndexEntry) {
+    if (at === null) return;
+    const res = insertMention(text, at, entry.path);
+    setText(res.text, res.caret);
+    // No trailing space is forced any more, so the caret can still sit at the
+    // end of a live token: dismiss THIS draft so the menu closes instead of
+    // re-opening over the inserted path.
+    atDismissedFor = res.text;
+    sheetDrill = null;
+  }
+
+  /** Sheet rows: a folder drills down (touch has no keyboard to type slashes). */
+  function drillAt(entry: FileIndexEntry) {
+    if (entry.isDir) sheetDrill = `${entry.path}/`;
+    else pickAt(entry);
+  }
+
+  function atSheetUp() {
+    const cur = sheetDrill ?? '';
+    if (cur === '') return;
+    const body = cur.slice(0, -1);
+    const cut = body.lastIndexOf('/');
+    sheetDrill = cut === -1 ? '' : body.slice(0, cut + 1);
+  }
+
+  function atSheetKeydown(e: KeyboardEvent) {
+    // Dismiss the suggestions, never the sheet underneath.
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      dismissAt();
+    }
+  }
+
+  function sizeLabel(entry: FileIndexEntry): string {
+    if (entry.isDir || entry.size === null) return 'folder';
+    const size = entry.size;
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0).replace(/\.0$/, '')} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1).replace(/\.0$/, '')} MB`;
+  }
 
   $effect(() => {
     void query;
@@ -83,11 +254,12 @@
     if (!viewport.coarse && !ended) el?.focus({ preventScroll: true });
   });
 
-  export function setText(next: string) {
+  export function setText(next: string, atCaret = next.length) {
     text = next;
+    caret = atCaret;
     void tick().then(() => {
       el?.focus();
-      el?.setSelectionRange(next.length, next.length);
+      el?.setSelectionRange(caret, caret);
     });
   }
 
@@ -157,6 +329,7 @@
     text = '';
     images = [];
     dismissedFor = null;
+    fileCache.clear();
     if (viewport.coarse) el?.blur();
     const ok = await active.send(message, mode, prompt.length ? prompt : undefined);
     sending = false;
@@ -180,6 +353,31 @@
 
   function onkeydown(e: KeyboardEvent) {
     if (e.isComposing || e.keyCode === 229) return;
+    if (atOpen) {
+      // Escape dismisses the suggestions whenever the @ state is open, even
+      // with an empty list (debounce, note, zero matches): it must never
+      // bubble into whatever overlay is open underneath.
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        dismissAt();
+        return;
+      }
+      if (atList.length > 0) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const n = atList.length;
+          atSel = (atActive + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+          return;
+        }
+        if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+          e.preventDefault();
+          e.stopPropagation();
+          pickAt(atList[atActive]!);
+          return;
+        }
+      }
+    }
     if (menuOpen) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -236,6 +434,32 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="composer" {ondragover} {ondrop}>
   <div class="box" class:disabled={ended}>
+    {#if atBoxOpen}
+      <div class="menu at-menu scroll-y" id="{uid}-at" role="listbox" aria-label="Files">
+        {#if atNote}
+          <p class="at-note" role="status">{atNote}</p>
+        {/if}
+        {#each atList as entry, i (entry.path)}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div
+            id="{uid}-at-o{i}"
+            class="opt"
+            class:on={i === atActive}
+            role="option"
+            aria-selected={i === atActive}
+            aria-label={entry.path}
+            tabindex="-1"
+            title={entry.path}
+            onpointerdown={(e) => e.preventDefault()}
+            onpointermove={() => i !== atActive && (atSel = i)}
+            onclick={() => pickAt(entry)}
+          >
+            <span class="name mono" class:is-dir={entry.isDir}>{entry.name}{entry.isDir ? '/' : ''}</span>
+            <span class="size">{sizeLabel(entry)}</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
     {#if menuOpen}
       <SlashMenu id="{uid}-slash" {groups} active={selected} onpick={pick} onhover={(i) => (sel = i)} />
     {/if}
@@ -253,12 +477,17 @@
       autocapitalize="sentences"
       spellcheck="true"
       enterkeyhint={viewport.coarse ? 'enter' : 'send'}
-      role={menuOpen ? 'combobox' : undefined}
-      aria-expanded={menuOpen ? true : undefined}
-      aria-controls={menuOpen ? `${uid}-slash` : undefined}
-      aria-activedescendant={menuOpen ? `${uid}-slash-o${selected}` : undefined}
-      aria-autocomplete={menuOpen ? 'list' : undefined}
+      role={menuOpen || atBoxOpen ? 'combobox' : undefined}
+      aria-expanded={menuOpen || atBoxOpen ? true : undefined}
+      aria-controls={menuOpen ? `${uid}-slash` : atBoxOpen ? `${uid}-at` : undefined}
+      aria-activedescendant={menuOpen
+        ? `${uid}-slash-o${selected}`
+        : atBoxOpen && atList.length > 0 ? `${uid}-at-o${atActive}` : undefined}
+      aria-autocomplete={menuOpen || atBoxOpen ? 'list' : undefined}
       {onkeydown}
+      oninput={atInput}
+      onclick={trackCaret}
+      onkeyup={trackCaret}
       {onpaste}
     ></textarea>
 
@@ -325,6 +554,45 @@
       </div>
     </div>
   </div>
+
+  {#if atOpen && atSheet}
+    <Sheet open onclose={dismissAt} title={sheetTitle} size="sm" flush>
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="at-sheet" onkeydown={atSheetKeydown}>
+        {#if sheetDrill}
+          <button type="button" class="at-back" onclick={atSheetUp} aria-label="Up one folder">
+            <Icon name="arrow-left" size={15} />
+            <span class="mono">..</span>
+          </button>
+        {/if}
+        {#if atNote}
+          <p class="at-note" role="status">{atNote}</p>
+        {:else if atList.length === 0 && !atLoaded}
+          <p class="at-note at-wait"><Spinner /></p>
+        {:else if atList.length === 0}
+          <p class="at-note">Empty folder</p>
+        {/if}
+        <!-- A plain list of real buttons, not a listbox: the sheet has no
+             aria-activedescendant owner and options must not be nested buttons. -->
+        <ul id="{uid}-at" class="at-list" aria-label="Files">
+          {#each atList as entry (entry.path)}
+            <li>
+              <button
+                type="button"
+                class="at-row"
+                aria-label={entry.path}
+                title={entry.path}
+                onclick={() => drillAt(entry)}
+              >
+                <span class="name mono" class:is-dir={entry.isDir}>{entry.name}{entry.isDir ? '/' : ''}</span>
+                <span class="size">{sizeLabel(entry)}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    </Sheet>
+  {/if}
 
   {#if !viewport.coarse}
     <p class="keys" aria-hidden="true">
@@ -450,6 +718,110 @@
     }
     .lbl {
       display: none;
+    }
+  }
+
+  /* ---- @-file mention suggestions (popover on desktop, sheet on touch) */
+
+  .at-menu {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + var(--s-2));
+    max-height: min(320px, 45vh);
+    padding: var(--s-1);
+    background: var(--surface);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-pop);
+    z-index: 5;
+    animation: at-rise var(--dur-fast) var(--ease);
+  }
+  .opt {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    min-height: max(32px, var(--hit));
+    padding: var(--s-1) var(--s-3);
+    border-radius: var(--r-md);
+    cursor: pointer;
+  }
+  .opt.on {
+    background: var(--press);
+  }
+  .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink);
+    text-align: left;
+  }
+  .name.is-dir {
+    color: var(--accent);
+  }
+  .size {
+    flex: none;
+    color: var(--ink-3);
+    font-size: var(--fs-sm);
+  }
+  .at-note {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--s-2) var(--s-3);
+    color: var(--ink-3);
+    font-size: var(--fs-sm);
+  }
+  .at-sheet {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--s-2) var(--s-2) var(--s-3);
+    overflow-y: auto;
+    max-height: 60vh;
+  }
+  .at-back {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-height: 44px;
+    padding: 0 var(--s-3);
+    border: 0;
+    background: transparent;
+    border-radius: var(--r-md);
+    color: var(--ink-3);
+    cursor: pointer;
+  }
+  .at-back:active,
+  .at-back:focus-visible {
+    background: var(--press);
+  }
+  .at-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .at-row {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    width: 100%;
+    min-height: 44px;
+    padding: var(--s-1) var(--s-3);
+    border: 0;
+    background: transparent;
+    border-radius: var(--r-md);
+    cursor: pointer;
+  }
+  .at-row:active,
+  .at-row:focus-visible {
+    background: var(--press);
+  }
+  @keyframes at-rise {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
     }
   }
 </style>
