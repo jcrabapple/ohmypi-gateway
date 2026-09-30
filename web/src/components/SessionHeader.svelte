@@ -168,7 +168,7 @@
         onblur={() => finishRename(true)}
       />
     {:else if info}
-      <button bind:this={titleBtn} type="button" class="title" title="Rename" onclick={startRename}>
+      <button bind:this={titleBtn} type="button" class="title" title="{title} — rename" onclick={startRename}>
         <span class="truncate"><InlineCode text={title} /></span>
         <Icon name="pencil" size={13} />
       </button>
@@ -257,7 +257,10 @@
     align-items: center;
     gap: var(--s-2);
     min-width: 0;
-    max-width: 100%;
+    /* Cap the title so a very long one cannot claim the whole header row and
+       truncate the meta chips (folder, model, files changed). The span still
+       ellipsifies; the full title shows on hover. */
+    max-width: min(100%, 48ch);
     min-height: var(--hit);
     padding: 0 var(--s-2);
     margin-left: calc(var(--s-2) * -1);
