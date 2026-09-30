@@ -5,6 +5,7 @@
   import { IMAGE_ACCEPT, imageProblem, isImageType, toPromptImage } from '../lib/composer/images';
   import { modeForKey, sendPlan } from '../lib/composer/send';
   import { filterCommands, flattenGroups, slashQuery, slashText, wantsInput, type SlashMatch } from '../lib/composer/slash';
+  import { lastTurnFailure } from '../lib/transcript/reducer';
   import { active, ui } from '../lib/state';
   import { Icon, Kbd } from '../lib/ui';
   import { scrollFade } from '../lib/ui/actions';
@@ -30,6 +31,12 @@
   const plan = $derived(sendPlan(streaming));
   const ended = $derived(active.phase === 'gone' || active.info?.exited === true);
   const canSend = $derived(active.phase === 'ready' && !ended && (text.trim() !== '' || images.length > 0));
+  const failure = $derived(lastTurnFailure(active.transcript));
+  // `retried` hides the chip while the accepted retry waits for omp to start
+  // the new turn; the transcript itself keeps the failed turn until then.
+  const canRetry = $derived(active.phase === 'ready' && !streaming && !ended && failure !== null && !active.transcript.retried);
+
+  let retrying = $state(false);
 
   const query = $derived(slashQuery(text));
   const groups = $derived(query !== null && dismissedFor !== text ? filterCommands(active.commands, query) : []);
@@ -207,6 +214,21 @@
       ui.error(e instanceof Error ? e.message : 'Could not stop');
     }
   }
+
+  async function retryTurn() {
+    if (retrying) return;
+    retrying = true;
+    try {
+      await active.retry();
+      // Optimistic: an accepted request hides the chip; omp's events refresh
+      // the transcript from here (agent_start re-enables the chip on failure).
+      active.markRetried();
+    } catch (e) {
+      ui.error(e instanceof Error ? e.message : 'Could not retry');
+    } finally {
+      retrying = false;
+    }
+  }
 </script>
 
 <svelte:window onpagehide={flush} onresize={grow} />
@@ -273,6 +295,18 @@
               {plan.secondary.label}
             </button>
           {/if}
+        {/if}
+        {#if canRetry}
+          <button
+            type="button"
+            class="btn btn-sm retry"
+            disabled={retrying}
+            onclick={retryTurn}
+            aria-label="Retry"
+            title="Retry the failed turn"
+          >
+            <Icon name="refresh" size={14} /> <span class="lbl">Retry</span>
+          </button>
         {/if}
         <button
           type="button"
@@ -386,6 +420,9 @@
   }
   .stop {
     color: var(--err);
+  }
+  .retry {
+    color: var(--accent);
   }
   .primary.round {
     width: max(32px, var(--hit));

@@ -587,6 +587,13 @@ async def abort(gw_id: str):
     return {"data": await get_session_or_404(gw_id).command("abort", timeout=15)}
 
 
+@app.post("/api/sessions/{gw_id}/retry")
+async def retry(gw_id: str):
+    """Re-run the last failed turn (omp abort_retry). Errors at the omp layer,
+    including "unknown command" on older omp, surface as 4xx like every command route."""
+    return {"data": await get_session_or_404(gw_id).command("abort_retry", timeout=15)}
+
+
 @app.post("/api/sessions/{gw_id}/compact")
 async def compact(gw_id: str, request: Request):
     body = await json_body(request) if (await request.body()) else {}

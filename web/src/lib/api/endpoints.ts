@@ -77,6 +77,7 @@ export const sessions = {
       timeoutMs: 60_000,
     }),
   abort: (id: string) => api<unknown>(`${sid(id)}/abort`, { method: POST }),
+  retry: (id: string) => api<unknown>(`${sid(id)}/retry`, { method: POST }),
   compact: (id: string, instructions?: string) =>
     api<unknown>(`${sid(id)}/compact`, { method: POST, body: instructions ? { instructions } : {}, timeoutMs: 300_000 }),
   setModel: (id: string, provider: string, modelId: string) =>

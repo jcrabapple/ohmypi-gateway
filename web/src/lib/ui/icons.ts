@@ -17,6 +17,7 @@ export const ICONS = {
   'arrow-down': '<path d="M12 5v14M5.5 12.5L12 19l6.5-6.5"/>',
   'arrow-left': '<path d="M19 12H5M11.5 5.5L5 12l6.5 6.5"/>',
   stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor" stroke="none"/>',
+  refresh: '<polyline points="21 4 21 10 15 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L21 10"/>',
   paperclip: '<path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.2-8.2a3.4 3.4 0 0 1 4.8 4.8L9.9 17a1.8 1.8 0 0 1-2.6-2.6l7.2-7.2"/>',
   image: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.4"/><path d="M4.5 17l4.5-4.5 3.5 3.5 2.5-2.5 4.5 4.5"/>',
   pencil: '<path d="M4 20h3.6L19 8.6a2.5 2.5 0 0 0-3.6-3.6L4 16.4z"/>',

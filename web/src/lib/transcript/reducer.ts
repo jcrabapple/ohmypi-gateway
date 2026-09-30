@@ -24,6 +24,7 @@ interface Work {
   pendingUi: UiRequest[];
   running: boolean;
   counter: number;
+  retried: boolean;
 }
 
 interface Ctx {
@@ -34,7 +35,7 @@ interface Ctx {
 }
 
 export function emptyTranscript(): TranscriptState {
-  return { items: [], pendingUi: [], running: false, counter: 0 };
+  return { items: [], pendingUi: [], running: false, counter: 0, retried: false };
 }
 
 export function reduce(state: TranscriptState, input: TranscriptInput): TranscriptState {
@@ -65,6 +66,11 @@ export function reduce(state: TranscriptState, input: TranscriptInput): Transcri
       d.items[i] = { ...(d.items[i] as UserItem), pending: false, failed: true, error: input.error };
       return d;
     }
+    case 'local-retry':
+      // An accepted retry only hides the chip. The failed turn stays in the
+      // transcript until omp's own events replace it, so a retry that never
+      // produces new events cannot silently rewrite history.
+      return state.retried ? state : { ...state, retried: true };
     case 'pending-ui': {
       const d = open(state);
       d.pendingUi = input.requests.filter(isBlockingUi);
@@ -74,7 +80,55 @@ export function reduce(state: TranscriptState, input: TranscriptInput): Transcri
 }
 
 function open(s: TranscriptState): Work {
-  return { items: s.items.slice(), pendingUi: s.pendingUi.slice(), running: s.running, counter: s.counter };
+  return {
+    items: s.items.slice(), pendingUi: s.pendingUi.slice(),
+    running: s.running, counter: s.counter, retried: s.retried,
+  };
+}
+
+// ------------------------------------------------------------ failed turns
+
+/**
+ * Index of the user item that started the last turn; everything from there on
+ * is the last turn. Steers belong to the turn they interrupted and a queued
+ * follow-up belongs to the NEXT turn, so neither is a boundary: treating one
+ * as the turn start would hide a real failure behind it.
+ */
+function turnStart(items: readonly Item[]): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]!;
+    if (it.kind === 'user' && it.note !== 'steer' && it.note !== 'steer-pending' && it.note !== 'queued') return i;
+  }
+  return -1;
+}
+
+/**
+ * Error text when the last turn ended in failure, else null. Only backend turn
+ * failures count: an assistant error message, or the "gave up retrying"
+ * notice. A client-side failed send never appears here: omp never saw that
+ * prompt, so retrying it (abort_retry) is wrong; it is resubmission territory.
+ * The FINAL state of the turn decides: the last failure marker wins, and a
+ * healthy assistant message after the last marker means omp recovered (its
+ * auto-retry succeeded), so there is nothing to retry. A tool erroring
+ * mid-turn does not fail the turn, so tool statuses are ignored here.
+ */
+export function lastTurnFailure(s: TranscriptState): string | null {
+  const start = turnStart(s.items);
+  if (start < 0) return null;
+  let markerAt = -1;
+  let healthyAt = -1;
+  let text: string | null = null;
+  for (let i = start + 1; i < s.items.length; i++) {
+    const it = s.items[i]!;
+    if (it.kind === 'assistant') {
+      if (it.error) { markerAt = i; text = it.error; }
+      else healthyAt = i;
+    } else if (it.kind === 'notice' && it.tag === 'retry' && it.level === 'error') {
+      markerAt = i;
+      text = it.text;
+    }
+  }
+  return markerAt > healthyAt ? text : null;
 }
 
 // ------------------------------------------------------------------ helpers
@@ -424,7 +478,10 @@ function interrupt(d: Work): void {
 // ------------------------------------------------------------------ history
 
 function fromHistory(prev: TranscriptState, messages: readonly OmpMessage[], streaming: boolean): TranscriptState {
-  const d: Work = { items: [], pendingUi: prev.pendingUi.slice(), running: streaming, counter: prev.counter };
+  const d: Work = {
+    items: [], pendingUi: prev.pendingUi.slice(), running: streaming,
+    counter: prev.counter, retried: prev.retried,
+  };
   messages.forEach((m, i) => applyMessage(d, m, { live: false }, { ending: true, fallback: `h${i}` }));
   if (!streaming) interrupt(d);
 
@@ -451,6 +508,9 @@ function onEvent(state: TranscriptState, event: OmpEvent | UnknownEvent, at: num
       if (state.running) return state;
       const d = open(state);
       d.running = true;
+      // omp picked the retry (or any new turn) up: its events own the
+      // transcript from here, so the optimistic chip hiding ends.
+      d.retried = false;
       return d;
     }
     case 'agent_end': {

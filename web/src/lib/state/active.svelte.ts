@@ -153,6 +153,15 @@ class ActiveSession {
     return this.need((id) => api.abort(id));
   }
 
+  retry(): Promise<unknown> {
+    return this.need((id) => api.retry(id));
+  }
+
+  /** The gateway accepted the retry: hide the chip until omp starts the new turn. History stays until omp's events replace the turn. */
+  markRetried(): void {
+    this.dispatch({ kind: 'local-retry' });
+  }
+
   answerUi(requestId: string, answer: UiAnswer): Promise<unknown> {
     return this.need((id) => api.answerUi(id, requestId, answer));
   }

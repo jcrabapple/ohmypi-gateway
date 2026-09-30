@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessagesResponse, OmpEvent, OmpMessage, UnknownEvent, UiRequest } from '../../api/types';
-import { emptyTranscript, reduce, resultText, splitContent, summarize } from '../reducer';
+import { emptyTranscript, lastTurnFailure, reduce, resultText, splitContent, summarize } from '../reducer';
 import type { Item, ToolItem, TranscriptInput, TranscriptState, UserItem } from '../types';
 import historyFixture from '../__fixtures__/messages.json';
 import turnFixture from '../__fixtures__/turn-tools-markdown.json';
@@ -609,5 +609,112 @@ describe('file changes', () => {
     expect(tools[1]!.args).toEqual({ path: 'CHANGELOG.md', content: '# Changelog\n\n## 1.1\n- Greeter keeps its greeting.\n' });
     expect(tools[2]!.files!.map((f) => f.path)).toEqual(['src/config.py', 'src/config.schema.json']);
     expect(JSON.stringify(tools.map((t) => t.files))).not.toContain('xd://');
+  });
+});
+
+describe('failed turns', () => {
+  const stateOf = (items: Item[]): TranscriptState => ({ ...emptyTranscript(), items });
+  const okUser: UserItem = { kind: 'user', id: 'u0', text: 'first', images: 0, pending: false };
+  const failedUser: UserItem = {
+    kind: 'user', id: 'u1', text: 'do it', images: 0, pending: false, failed: true, error: 'boom',
+  };
+  const okAssistant: Item = { kind: 'assistant', id: 'a0', text: 'done', streaming: false };
+  const badAssistant: Item = { kind: 'assistant', id: 'a1', text: 'partial', streaming: false, error: 'model exploded' };
+  const gaveUpNotice: Item = {
+    kind: 'notice', id: 'n1', level: 'error', text: 'Gave up retrying: rate limited', tag: 'retry',
+  };
+  const erroredTool: Item = {
+    kind: 'tool', id: 't1', toolCallId: 't1', toolName: 'bash', args: undefined, summary: 'ls', output: 'nope',
+    status: 'error',
+  };
+
+  it('ignores a client-side failed send: resubmission, not retry', () => {
+    expect(lastTurnFailure(stateOf([failedUser]))).toBeNull();
+  });
+
+  it('sees an assistant error in the last turn', () => {
+    expect(lastTurnFailure(stateOf([okUser, badAssistant]))).toBe('model exploded');
+  });
+
+  it('sees a gave-up-retrying notice', () => {
+    expect(lastTurnFailure(stateOf([okUser, gaveUpNotice]))).toBe('Gave up retrying: rate limited');
+  });
+
+  it('ignores a tool erroring mid-turn and clean turns', () => {
+    expect(lastTurnFailure(stateOf([okUser, erroredTool, okAssistant]))).toBeNull();
+    expect(lastTurnFailure(stateOf([okUser, okAssistant]))).toBeNull();
+  });
+
+  it('only the last turn counts', () => {
+    expect(lastTurnFailure(stateOf([failedUser, okUser, okAssistant]))).toBeNull();
+  });
+
+  it('a steer never becomes the turn boundary', () => {
+    const stale: UserItem = {
+      kind: 'user', id: 'u3', text: 'steer', images: 0, pending: false, note: 'steer-pending', stale: true,
+    };
+    // A stale steer after a client-failed send is still no retry signal...
+    expect(lastTurnFailure(stateOf([failedUser, stale]))).toBeNull();
+    // ...and it must not hide a real failure that happened before it.
+    expect(lastTurnFailure(stateOf([okUser, badAssistant, stale]))).toBe('model exploded');
+    const live: UserItem = { kind: 'user', id: 'u4', text: 'go on', images: 0, pending: false, note: 'steer' };
+    expect(lastTurnFailure(stateOf([okUser, badAssistant, live]))).toBe('model exploded');
+  });
+
+  it('a queued follow-up does not hide the failure of the turn it waits for', () => {
+    const queued: UserItem = { kind: 'user', id: 'u5', text: 'next', images: 0, pending: true, note: 'queued' };
+    expect(lastTurnFailure(stateOf([okUser, badAssistant, queued]))).toBe('model exploded');
+  });
+
+  it('reads the final state: a recovery after the error is nothing to retry', () => {
+    expect(lastTurnFailure(stateOf([okUser, badAssistant, okAssistant]))).toBeNull();
+  });
+
+  it('reads the final state: the last failure marker wins', () => {
+    expect(lastTurnFailure(stateOf([okUser, badAssistant, gaveUpNotice]))).toBe('Gave up retrying: rate limited');
+    expect(lastTurnFailure(stateOf([okUser, okAssistant, badAssistant]))).toBe('model exploded');
+  });
+
+  it('ignores a pending resend after a failure', () => {
+    const resend: UserItem = { kind: 'user', id: 'u2', text: 'again', images: 0, pending: true };
+    expect(lastTurnFailure(stateOf([failedUser, resend]))).toBeNull();
+  });
+
+  it('is null on an empty transcript', () => {
+    expect(lastTurnFailure(emptyTranscript())).toBeNull();
+  });
+});
+
+describe('local-retry', () => {
+  const okUser: UserItem = { kind: 'user', id: 'u0', text: 'first', images: 0, pending: false };
+  const failedUser: UserItem = {
+    kind: 'user', id: 'u1', text: 'do it', images: 0, pending: false, failed: true, error: 'boom',
+  };
+  const badAssistant: Item = { kind: 'assistant', id: 'a1', text: 'partial', streaming: false, error: 'model exploded' };
+  const gaveUpNotice: Item = {
+    kind: 'notice', id: 'n1', level: 'error', text: 'Gave up retrying: rate limited', tag: 'retry',
+  };
+
+  it('only flags the state: history is untouched, the failure stays readable', () => {
+    const before: TranscriptState = { ...emptyTranscript(), items: [failedUser, okUser, badAssistant, gaveUpNotice] };
+    const s = reduce(before, { kind: 'local-retry' });
+    expect(s.retried).toBe(true);
+    expect(s.items).toEqual(before.items);
+    expect(lastTurnFailure(s)).toBe('Gave up retrying: rate limited');
+  });
+
+  it('is a no-op when a retry is already in flight', () => {
+    const done = reduce({ ...emptyTranscript(), items: [okUser, badAssistant] }, { kind: 'local-retry' });
+    expect(reduce(done, { kind: 'local-retry' })).toBe(done);
+  });
+
+  it('survives a history resync but ends when omp starts the new turn', () => {
+    const retried = reduce({ ...emptyTranscript(), items: [okUser, badAssistant] }, { kind: 'local-retry' });
+    const resynced = reduce(retried, {
+      kind: 'history', messages: [{ role: 'user', content: 'first', timestamp: 1 } as OmpMessage],
+    });
+    expect(resynced.retried).toBe(true);
+    const started = reduce(retried, { kind: 'event', event: { type: 'agent_start' } as OmpEvent });
+    expect(started.retried).toBe(false);
   });
 });

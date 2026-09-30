@@ -121,6 +121,11 @@ export interface TranscriptState {
   running: boolean;
   /** Source of ids for items that have no natural key. */
   counter: number;
+  /**
+   * A retry was accepted and omp has not started the new turn yet. Hides the
+   * retry chip without touching the transcript history; agent_start clears it.
+   */
+  retried: boolean;
 }
 
 export type TranscriptInput =
@@ -134,4 +139,5 @@ export type TranscriptInput =
       images?: readonly PromptImage[];
     }
   | { kind: 'local-send-failed'; localId: string; error: string }
+  | { kind: 'local-retry' }
   | { kind: 'pending-ui'; requests: readonly UiRequest[] };

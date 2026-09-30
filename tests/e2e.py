@@ -245,6 +245,17 @@ try:
     check("rename", ok("GET", f"/api/sessions/{gid}")["ompSessionName"] == "e2e probe")
     raw = ok("POST", f"/api/sessions/{gid}/rpc", {"type": "get_last_assistant_text"})
     check("raw-rpc-passthrough", raw["data"] is not None)
+
+    # Retry route: 401 unauthenticated, 404 unknown session, 200 JSON envelope on
+    # the live session (whether omp accepts or refuses the abort_retry is omp's
+    # business; the gateway must answer as a command route does).
+    code, _, _ = req("POST", f"/api/sessions/{gid}/retry", token=None)
+    check("retry-unauthenticated-401", code == 401)
+    code, _, _ = req("POST", "/api/sessions/e2e-no-such-gw/retry")
+    check("retry-unknown-session-404", code == 404)
+    code, data, _ = req("POST", f"/api/sessions/{gid}/retry", timeout=90)
+    check("retry-live-shape", code == 200 and isinstance(data, dict), f"-> {code} {str(data)[:80]}")
+
     cursor = ok("GET", f"/api/sessions/{gid}/events")["lastSeq"]
 
     async def ws_stream():

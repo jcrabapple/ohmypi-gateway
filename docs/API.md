@@ -104,6 +104,7 @@ session is a transcript on disk that can be resumed.
 | DELETE | `/sessions/{id}` | stop the child; transcript stays on disk |
 | POST | `/sessions/{id}/prompt` | `{message, images?, mode?, wait?, timeout?}`. `images` is up to 4 of `{"type":"image","data":"<base64>","mimeType":"image/png"|"image/jpeg"|"image/webp"|"image/gif"}` (max 5 MB decoded each; raw base64 only, no `data:` prefix) and is forwarded to omp on every mode. Bad type, mime, base64, size, or file signature (magic bytes are checked against the claimed mime type) is 422. `message` may be empty when images are present. `mode`: `prompt` \| `steer` (inject into the running turn) \| `follow_up` (queue for after it). Returns immediately with the ack; follow progress on the WebSocket. `wait:true` blocks until the turn ends and adds `lastAssistantText` (see note) |
 | POST | `/sessions/{id}/abort` | stop the current turn |
+| POST | `/sessions/{id}/retry` | re-run the last failed turn (omp `abort_retry`). An omp-level error (nothing to retry, unknown command on older omp) is 400 like every command route |
 | POST | `/sessions/{id}/compact` | `{instructions?}` |
 | GET | `/sessions/{id}/state` | omp state, minus the system prompt and tool dumps |
 | GET | `/sessions/{id}/messages` | full transcript (omp message objects) |
