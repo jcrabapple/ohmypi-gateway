@@ -21,8 +21,11 @@ export function extractAtQuery(beforeCaret: string): AtQuery | null {
   if (q !== -1) {
     const prev = beforeCaret.charAt(q - 1); // '' when the @" sits at index 0
     const opened = prev === '' || /\s/.test(prev);
-    if (opened && !beforeCaret.slice(q + 2).includes('"')) {
-      return { start: q, query: beforeCaret.slice(q + 2), quoted: true };
+    const rest = beforeCaret.slice(q + 2);
+    // A quote on a later line is somebody else's text, so a quoted query
+    // never spans a newline: an unclosed @" on its own line is just text.
+    if (opened && !rest.includes('"') && !rest.includes('\n')) {
+      return { start: q, query: rest, quoted: true };
     }
   }
   const m = /(?:^|\s)@(\S*)$/.exec(beforeCaret);
@@ -96,6 +99,25 @@ export function rankEntries(entries: readonly FileIndexEntry[], query: string): 
 }
 
 /**
+ * Where the @-token being replaced ends, given the full text. For a quoted
+ * token that is the closing quote plus one - but only when that quote sits
+ * on the same line as the trigger; a quote on a later line is somebody
+ * else's text, and an unclosed token ends where the typing stopped, at
+ * `at.start + 2 + at.query.length`. Never extends past a newline.
+ */
+function tokenEnd(text: string, at: AtQuery): number {
+  if (!at.quoted) {
+    let end = at.start + 1;
+    while (end < text.length && !/\s/.test(text.charAt(end))) end++;
+    return end;
+  }
+  const close = text.indexOf('"', at.start + 2);
+  const newline = text.indexOf('\n', at.start + 2);
+  if (close !== -1 && (newline === -1 || close < newline)) return close + 1;
+  return at.start + 2 + at.query.length;
+}
+
+/**
  * Replace the whole @-token at `at` with the picked path (quoted when the
  * path needs it). The token runs from the trigger through everything being
  * typed, so a mid-word caret (`@src/m|ain.ts`) replaces the trailing junk
@@ -105,14 +127,7 @@ export function rankEntries(entries: readonly FileIndexEntry[], query: string): 
  * new full text and the caret offset inside it.
  */
 export function insertMention(text: string, at: AtQuery, path: string): { text: string; caret: number } {
-  let end: number;
-  if (at.quoted) {
-    const close = text.indexOf('"', at.start + 2);
-    end = close === -1 ? text.length : close + 1;
-  } else {
-    end = at.start + 1;
-    while (end < text.length && !/\s/.test(text.charAt(end))) end++;
-  }
+  const end = tokenEnd(text, at);
   const token = /\s/.test(path) ? `@"${path}"` : `@${path}`;
   const gap = end < text.length && !/\s/.test(text.charAt(end)) ? ' ' : '';
   return {

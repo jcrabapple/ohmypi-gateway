@@ -71,7 +71,7 @@
       disabled={!subagents.hasAny}
       onclick={() => (tab = 'agents')}
     >
-      Agents <span class="mono frac">{subagents.total}</span>
+      Helpers <span class="mono frac">{subagents.total}</span>
     </button>
   </div>
 

@@ -35,7 +35,7 @@
   function label(row: SubagentRow): string {
     const bits = [STATUS_WORD[row.status]];
     if (row.currentTool) bits.push(row.currentTool);
-    return `${row.agent || 'Subagent'}: ${bits.join(', ')}`;
+    return `${row.agent || 'Helper'}: ${bits.join(', ')}`;
   }
 
   interface SheetState {
@@ -58,7 +58,7 @@
   function open(row: SubagentRow): void {
     sheet = {
       key: row.key,
-      agent: row.agent || 'Subagent',
+      agent: row.agent || 'Helper',
       messages: [],
       nextByte: null,
       loading: Boolean(row.id),
@@ -104,7 +104,7 @@
 
 <div class="pane" role="tabpanel" id="plan-pane-agents" aria-labelledby="plan-tab-agents">
   {#if subagents.rows.length === 0}
-    <p class="empty">No subagents</p>
+    <p class="empty">No helpers in this session.</p>
   {:else}
     <ul class="agents">
       {#each subagents.rows as row (row.key)}
@@ -124,7 +124,7 @@
             </span>
             <span class="body">
               <span class="line1">
-                <span class="agent truncate" title={row.agent || 'Subagent'}>{row.agent || 'Subagent'}</span>{#if row.id && row.id !== row.agent}<span class="mono subid truncate" title={row.id}>{row.id}</span>{/if}
+                <span class="agent truncate" title={row.agent || 'Helper'}>{row.agent || 'Helper'}</span>{#if row.id && row.id !== row.agent}<span class="mono subid truncate" title={row.id}>{row.id}</span>{/if}
                 {#if row.status === 'running' && row.currentTool}
                   <span class="tool mono truncate">{row.currentTool}</span>
                 {/if}
@@ -156,7 +156,7 @@
       {:else if sheet.error}
         <p class="note err" role="status"><Icon name="alert" size={13} /> {sheet.error}</p>
       {:else if sheet.messages.length === 0}
-        <p class="empty">{openRow?.id ? 'No messages yet' : 'Waiting for subagent session...'}</p>
+        <p class="empty">{openRow?.id ? 'No messages yet' : 'Waiting for the helper to start.'}</p>
       {:else}
         {#each sheetBlocks as b (b.key)}
           <div class="block">

@@ -23,7 +23,7 @@ afterEach(() => {
 describe('SubagentPanel', () => {
   it('renders an empty state while no subagent has been seen', () => {
     const { target } = render(SubagentPanel, {});
-    expect(target.textContent).toContain('No subagents');
+    expect(target.textContent).toContain('No helpers in this session.');
     expect(target.querySelector('button')).toBeNull();
   });
 
@@ -147,7 +147,7 @@ describe('SubagentPanel', () => {
     target.querySelector<HTMLButtonElement>('li button.row')!.click();
     await settle();
     expect(messages).not.toHaveBeenCalled();
-    expect(target.textContent).toContain('Waiting for subagent session...');
+    expect(target.textContent).toContain('Waiting for the helper to start.');
   });
 
   it('shows the fetch error in the sheet instead of a crash', async () => {
@@ -160,17 +160,17 @@ describe('SubagentPanel', () => {
     expect(target.querySelector('dialog')!.textContent).toContain('subagent gone');
   });
 
-  it('adds the Agents tab to the panel with the roster count, disabled while empty', async () => {
+  it('adds the Helpers tab to the panel with the roster count, disabled while empty', async () => {
     const { target } = render(PlanPanel, {});
-    const tab = buttonNamed(target, /Agents/)!;
+    const tab = buttonNamed(target, /Helpers/)!;
     expect(tab.disabled).toBe(true);
     expect(target.textContent).not.toContain('explore');
 
     feedProgress({ index: 1, agent: 'explore', progress: { id: 'a1', index: 1, agent: 'explore', status: 'running' } });
     await settle();
     expect(tab.disabled).toBe(false);
-    expect(tab.textContent?.replace(/\s+/g, ' ')).toContain('Agents 1');
-    buttonNamed(target, /Agents/)?.click();
+    expect(tab.textContent?.replace(/\s+/g, ' ')).toContain('Helpers 1');
+    buttonNamed(target, /Helpers/)?.click();
     await settle();
     expect(target.querySelector('#plan-pane-agents')!.textContent).toContain('explore');
   });

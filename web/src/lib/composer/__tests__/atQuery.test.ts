@@ -42,6 +42,16 @@ describe('extractAtQuery', () => {
     expect(extractAtQuery('look @"my fol"')).toBeNull();
     expect(extractAtQuery('@"old" then @ne')).toEqual({ start: 12, query: 'ne', quoted: false });
   });
+
+  it('a quoted query never spans newlines (ported from Omai K3)', () => {
+    // An unclosed @" with a later line of text must not become a query that
+    // swallows the rest of the message.
+    expect(extractAtQuery('@"notes\nsecond line')).toBeNull();
+  });
+
+  it('after a newline the plain token rule applies (ported from Omai K3)', () => {
+    expect(extractAtQuery('@"x\nlook @re')).toEqual({ start: 9, query: 're', quoted: false });
+  });
 });
 
 describe('atDirPrefix', () => {
@@ -90,6 +100,19 @@ describe('rankEntries', () => {
 });
 
 describe('insertMention', () => {
+  it('a quote on a LATER line is not used as the close (ported from Omai K1/K3)', () => {
+    // Picking a file after an unclosed @" used to delete everything up to a
+    // later quote in the message; the token now ends where typing stopped.
+    const res = insertMention(
+      'look @"src/com\nhe said "hi"',
+      { start: 5, query: 'src/com', quoted: true },
+      'src/composer',
+    );
+    expect(res.text).toBe('look @src/composer\nhe said "hi"');
+    expect(res.caret).toBe('look @src/composer'.length);
+  });
+
+
   it('replaces the @query token at end of text and adds no trailing space there', () => {
     const res = insertMention('look @s', { start: 5, query: 's', quoted: false }, 'src/main.py');
     expect(res).toEqual({ text: 'look @src/main.py', caret: 'look @src/main.py'.length });
