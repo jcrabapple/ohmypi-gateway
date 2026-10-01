@@ -123,14 +123,15 @@ class ActiveSession {
     this.dispatch({ kind: 'local-send', localId, text, mode, images });
     try {
       const info = await api.prompt(gwId, text, mode, images);
+      // The review pin is keyed to the session the prompt went to, and its
+      // meaning is "settled, ready for review": a gateway-accepted prompt
+      // un-settles it, so the unflag follows gwId, not the currently open
+      // session. Guarding it by this.gwId stranded the pin when the user
+      // navigated away during the request (delta-gate F8).
+      reviewed.unflag(gwId);
       if (this.gwId === gwId) {
         this.setInfo(info);
         if (mode !== 'prompt') void this.refreshQueued();
-        // The user is working in here again: the review pin only makes sense on a settled session.
-        // Cleared after the gateway accepts the prompt, so a failed send keeps the pin.
-        // Guarded like every other post-await write: a send that resolved after the
-        // user switched sessions must not mutate the other session's rail group.
-        reviewed.unflag(gwId);
       }
       return true;
     } catch (e) {
