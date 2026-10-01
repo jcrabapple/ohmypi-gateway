@@ -7,6 +7,7 @@ import { ui } from './ui.svelte';
 
 const ROUTE = /^#\/s\/([\w-]+)(\/changes)?$/;
 const USAGE = '#/usage';
+const SEARCH = '#/search';
 
 export interface HashRoute {
   gwId: string;
@@ -26,6 +27,8 @@ class Nav {
   );
   /** Gateway-wide usage page (`#/usage`). */
   usage = $state((globalThis.location?.hash ?? '') === USAGE);
+  /** Gateway-wide transcript search page (`#/search`). */
+  search = $state((globalThis.location?.hash ?? '') === SEARCH);
   /** Saved session file being resumed right now, for the spinner on its row. */
   resuming = $state<string | null>(null);
   /** The last session that died on us, so the new-session sheet can offer its draft. */
@@ -38,6 +41,7 @@ class Nav {
       this.gwId = r?.gwId ?? null;
       this.view = r?.changes ? 'changes' : 'transcript';
       this.usage = location.hash === USAGE;
+      this.search = location.hash === SEARCH;
     };
     on();
     window.addEventListener('hashchange', on);
@@ -48,6 +52,7 @@ class Nav {
     ui.close('drawer');
     this.view = 'transcript';
     this.usage = false;
+    this.search = false;
     if (location.hash === `#/s/${gwId}`) this.gwId = gwId;
     else location.hash = `#/s/${gwId}`;
   }
@@ -55,8 +60,17 @@ class Nav {
   /** The gateway-wide usage page. */
   openUsage(): void {
     ui.close('drawer');
+    this.search = false;
     if (location.hash === USAGE) this.usage = true;
     else location.hash = USAGE;
+  }
+
+  /** The gateway-wide transcript search page. */
+  openSearch(): void {
+    ui.close('drawer');
+    this.usage = false;
+    if (location.hash === SEARCH) this.search = true;
+    else location.hash = SEARCH;
   }
 
   /** The open session's per-session Changes page. */
@@ -64,6 +78,7 @@ class Nav {
     ui.close('drawer');
     this.view = 'changes';
     this.usage = false;
+    this.search = false;
     if (location.hash === `#/s/${gwId}/changes`) {
       this.gwId = gwId;
     } else {
@@ -77,6 +92,7 @@ class Nav {
     this.gwId = null;
     this.view = 'transcript';
     this.usage = false;
+    this.search = false;
   }
 
   /** Resume a saved transcript. If omp is already running it, open the live session instead. */

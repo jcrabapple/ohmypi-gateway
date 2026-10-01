@@ -133,6 +133,24 @@ base64url - malformed keys are 422, never stored. Endpoints that answer
 | POST | `/push/subscribe` | register a device: `{endpoint, keys: {p256dh, auth}}` (the browser PushSubscription, as JSON). Idempotent per endpoint; `-> {ok, subscriptions}`. Non-https endpoint or missing keys 422 |
 | POST | `/push/unsubscribe` | remove a device: `{endpoint}`; `-> {ok, subscriptions}` |
 
+### Cross-session search
+
+`GET /api/search?q=&limit=&role=&refresh=` — full-text search over saved
+session transcripts (user/assistant text blocks only; thinking and tool output
+are not indexed). The FTS5 index lives at `search-index.db` next to
+`auth-token` (override: `OMPGW_SEARCH_DB`; the transcript root:
+`OMPGW_SESSIONS_DIR`). It refreshes incrementally on request, at most once per
+30 seconds (`refresh=1` forces), and prunes deleted transcripts automatically.
+
+Every query word is a prefix match; raw FTS5 syntax from the client is
+stripped, so it can neither error the query nor widen it. Results are ranked
+by relevance and carry `<mark>` highlights around matches (escape the snippet
+before rendering, then turn the markers into elements).
+
+| Method | Path | |
+|---|---|---|
+| GET | `/search` | `{q}` (required): `{total, results: [{path, line, role, ts, snippet, sessionId, cwd, title, gwId?}], indexed: {files, messages}}`. `gwId` is present when that transcript is currently live. `limit` 1..200 (default 40); `role` `user\|assistant`. `q` missing 422, bad `role` 422, an unsearchable `q` (no word characters) is 200 with 0 results |
+
 ### Sessions
 
 A *live* session is a running omp child owned by the gateway. A *saved*

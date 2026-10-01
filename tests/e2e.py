@@ -710,5 +710,31 @@ check("push-unsubscribe-ok", code == 200 and data.get("subscriptions") == 0, f"-
 code, data, _ = req("POST", "/api/push/unsubscribe", {})
 check("push-unsubscribe-requires-endpoint", code == 422, f"-> {code}")
 
+# --- cross-session search -------------------------------------------------
+
+code, data, _ = req("GET", "/api/search?q=omp")
+check("search-hits-or-empty", code == 200 and "total" in data and "results" in data and "indexed" in data,
+      f"-> {code} total={data.get('total')} files={data.get('indexed', {}).get('files')}")
+check("search-index-populated", data.get("indexed", {}).get("files", 0) > 0,
+      f"-> {data.get('indexed')}")
+
+code, data, _ = req("GET", "/api/search?q=&x=1")
+check("search-requires-q", code == 422, f"-> {code}")
+
+code, data, _ = req("GET", "/api/search?q=omp&role=bogus")
+check("search-rejects-bad-role", code == 422, f"-> {code}")
+
+code, data, _ = req("GET", "/api/search?q=!!!***")
+check("search-unsearchable-is-empty-not-500", code == 200 and data.get("total") == 0, f"-> {code}")
+
+r = ok("GET", "/api/search?q=omp&limit=3")
+if r["results"]:
+    hit = r["results"][0]
+    check("search-hit-shape", all(k in hit for k in ("path", "line", "role", "snippet", "gwId")),
+          f"keys={sorted(hit)}")
+    check("search-honors-limit", len(r["results"]) <= 3, f"-> {len(r['results'])}")
+else:
+    check("search-hit-shape", True, "no hits to shape-check")
+
 print(f"\n{BASE}: " + ("all green" if not failures else f"FAILURES: {failures}"))
 sys.exit(1 if failures else 0)

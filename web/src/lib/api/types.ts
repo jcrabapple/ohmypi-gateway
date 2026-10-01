@@ -560,3 +560,25 @@ export interface LedgerSessionsResponse {
   days: number;
   sessions: LedgerSessionRow[];
 }
+
+/** GET /api/search?q= — one matching message in a saved transcript. */
+export interface SearchHit {
+  path: string;
+  line: number;
+  role: 'user' | 'assistant';
+  ts: string;
+  /** Text with <mark>…</mark> around matches; escape before rendering. */
+  snippet: string;
+  sessionId: string | null;
+  cwd: string | null;
+  title: string | null;
+  /** Present when that transcript is currently live on the gateway. */
+  gwId?: string | null;
+}
+
+/** GET /api/search?q= */
+export interface SearchResponse {
+  total: number;
+  results: SearchHit[];
+  indexed: { files: number; messages: number };
+}

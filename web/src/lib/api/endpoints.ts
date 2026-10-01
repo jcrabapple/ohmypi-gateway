@@ -3,8 +3,9 @@
 import { api, resetSignedOut } from './client';
 import type {
   ApprovalMode, CatalogModels, CommandsResponse, EntriesResponse, EventsResponse, FileIndexEntry, FilesResponse,
-  ForkResponse, LedgerResponse, LedgerSessionsResponse, MessagesResponse, SavedSession, SessionInfo, SessionsList,
-  SessionState, SessionStats, SubagentMessagesResponse, SystemInfo, ThinkingLevel, UiAnswer, UiRequest,
+  ForkResponse, LedgerResponse, LedgerSessionsResponse, MessagesResponse, SavedSession, SearchResponse,
+  SessionInfo, SessionsList, SessionState, SessionStats, SubagentMessagesResponse, SystemInfo, ThinkingLevel,
+  UiAnswer, UiRequest,
 } from './types';
 
 export type PromptMode = 'prompt' | 'steer' | 'follow_up';
@@ -57,6 +58,13 @@ export const host = {
   ledger: (days: number, signal?: AbortSignal) => api<LedgerResponse>(`/api/ledger?days=${days}`, { signal }),
   ledgerSessions: (days: number, signal?: AbortSignal) =>
     api<LedgerSessionsResponse>(`/api/ledger/sessions?days=${days}`, { signal }),
+  search: (q: string, opts: { limit?: number; role?: 'user' | 'assistant' | null; refresh?: boolean; signal?: AbortSignal } = {}) => {
+    const params = new URLSearchParams({ q });
+    if (opts.limit) params.set('limit', String(opts.limit));
+    if (opts.role) params.set('role', opts.role);
+    if (opts.refresh) params.set('refresh', '1');
+    return api<SearchResponse>('/api/search?' + params.toString(), { signal: opts.signal });
+  },
 };
 
 export const sessions = {

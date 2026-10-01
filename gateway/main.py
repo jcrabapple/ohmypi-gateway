@@ -49,7 +49,7 @@ from .bridge import (
 )
 from .ledger import DEFAULT_DAYS, close_ledger, get_ledger
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PROJECT_DIR / "static"
 # Built web client. Served when WEB_DIST/index.html exists, else the Alpine dashboard.
@@ -458,6 +458,32 @@ async def push_unsubscribe(request: Request):
     if not isinstance(endpoint, str) or not endpoint:
         raise HTTPException(422, "endpoint required")
     return {"ok": True, "subscriptions": push_mod.unsubscribe(endpoint)}
+
+
+@app.get("/api/search")
+async def search_endpoint(q: str = Query(min_length=1), limit: int = 40,
+                          role: str | None = None, refresh: int = 0):
+    """Full-text search over saved session transcripts (user/assistant text).
+    Index refreshes incrementally, at most once per 30s (refresh=1 forces).
+    Results carry <mark> highlights the client must escape before rendering."""
+    from . import search as smod
+    if role not in (None, "user", "assistant"):
+        raise HTTPException(422, "role must be user|assistant")
+
+    def run() -> dict:
+        smod.ensure_fresh(force=bool(refresh))
+        return smod.query(q, limit=limit, role=role)
+
+    out = await asyncio.to_thread(run)
+    live_by_file: dict[str, str] = {}
+    for sess in get_manager().sessions.values():
+        if sess.omp_session_file:
+            # omp emits resolved paths (/var/home on Aurora); compare resolved.
+            live_by_file[str(Path(sess.omp_session_file).resolve())] = sess.gw_id
+    for r in out["results"]:
+        r["gwId"] = live_by_file.get(str(Path(r["path"]).resolve()))
+    out["indexed"] = await asyncio.to_thread(smod.index_stats)
+    return out
 
 
 @app.get("/api/skills")

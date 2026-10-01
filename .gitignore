@@ -5,6 +5,9 @@ auth-token
 gateway.env
 push-vapid.json
 push-subs.json
+search-index.db
+search-index.db-wal
+search-index.db-shm
 
 # local dev artifacts (raw captures contain local paths)
 dev/

@@ -10,6 +10,7 @@
   import Home from './Home.svelte';
   import Overlays from './Overlays.svelte';
   import Rail from './Rail.svelte';
+  import SearchView from './SearchView.svelte';
   import SessionView from './SessionView.svelte';
   import UsageView from './UsageView.svelte';
 
@@ -114,7 +115,9 @@
     ></button>
   {/if}
   <main>
-    {#if nav.usage}
+    {#if nav.search}
+      <SearchView />
+    {:else if nav.usage}
       <UsageView />
     {:else if nav.gwId}
       {#key nav.gwId}
