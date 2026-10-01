@@ -44,6 +44,10 @@
 <style>
   .seg {
     display: inline-flex;
+    /* Grid parents (settings Sections) stretch items to the column by
+       default, which turned the track into a full-bleed bar of mostly dead
+       space. Opt out; flex/block contexts ignore justify-self. */
+    justify-self: start;
     padding: 2px;
     gap: 2px;
     border-radius: var(--r-md);

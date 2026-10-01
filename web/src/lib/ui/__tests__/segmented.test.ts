@@ -50,4 +50,13 @@ describe('Segmented', () => {
     press(radios[0]!, 'x');
     expect(onchange).not.toHaveBeenCalled();
   });
+
+  it('opts out of grid-item stretching (settings sections are grids)', () => {
+    // Without justify-self: start, a grid parent stretches the track to full
+    // width and the segmented control renders as a mostly-empty bar.
+    const { target } = mountIt();
+    const seg = target.querySelector('.seg') as HTMLElement;
+    expect(seg).toBeTruthy();
+    expect(getComputedStyle(seg).justifySelf).toBe('start');
+  });
 });
