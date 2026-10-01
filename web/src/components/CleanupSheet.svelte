@@ -3,13 +3,13 @@
   // Running sessions are never offered; the gateway refuses them anyway (409).
   import { onMount } from 'svelte';
   import { sessions as api } from '../lib/api/endpoints';
-  import { basename } from '../lib/format';
   import { pins, sessionsStore } from '../lib/state';
-  import { Icon, Sheet, toast } from '../lib/ui';
+  import { confirm, Sheet, toast } from '../lib/ui';
+  import Segmented from '../lib/ui/Segmented.svelte';
   import type { OverlayProps } from '../lib/overlays';
   import type { SavedSession } from '../lib/api/types';
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { onclose }: OverlayProps = $props();
 
   let selected = $state(new Set<string>());
   let filter = $state('');
@@ -21,6 +21,8 @@
   const AGES: readonly (['any', 'Any'] | [7, '7d'] | [30, '30d'] | [90, '90d'])[] = [
     ['any', 'Any'], [7, '7d'], [30, '30d'], [90, '90d'],
   ];
+
+  const ageOptions = AGES.map(([v, lbl]) => ({ id: String(v), label: lbl }));
 
   onMount(() => {
     void sessionsStore.refresh();
@@ -71,20 +73,33 @@
     return kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${Math.round(kb)} KB`;
   }
 
+  const eligible = $derived(saved.filter((s) => !s.running));
+
   async function deleteSelected(): Promise<void> {
     if (busy || selected.size === 0) return;
+    const hidden = [...selected].filter((f) => !visible.some((s) => s.file === f)).length;
+    const extra = hidden > 0 ? ` (${hidden} currently hidden by filters)` : '';
+    const ok = await confirm({
+      title: 'Delete saved sessions',
+      body: `Permanently delete ${selected.size} session transcript${selected.size === 1 ? '' : 's'}${extra}? This cannot be undone.`,
+      confirmLabel: `Delete ${selected.size}`,
+    });
+    if (!ok) return;
     busy = true;
     let deleted = 0;
     let failed = 0;
+    const remaining = new Set(selected);
     for (const file of selected) {
       try {
         await api.deleteSaved(file);
         deleted += 1;
+        // A failed delete stays selected so the user can see and retry it.
+        remaining.delete(file);
+        selected = new Set(remaining);
       } catch {
         failed += 1;
       }
     }
-    selected = new Set();
     await sessionsStore.refresh();
     busy = false;
     if (failed) toast(`Deleted ${deleted}, ${failed} failed`, { kind: 'error' });
@@ -120,15 +135,14 @@
         aria-label="Filter saved sessions"
         bind:value={filter}
       />
-      <div class="ages" role="radiogroup" aria-label="Age filter">
-        {#each AGES as [v, lbl] (v)}
-          <button type="button" class:on={olderThan === v} onclick={() => (olderThan = v)}>{lbl}</button>
-        {/each}
+      <div class="ages">
+        <Segmented label="Age filter" value={String(olderThan)} options={ageOptions}
+          onchange={(v) => (olderThan = v === 'any' ? 'any' : (Number(v) as 7 | 30 | 90))} />
       </div>
     </div>
 
     <div class="sel-row">
-      <span class="count">{visible.length} of {saved.length} shown, {selected.size} selected</span>
+      <span class="count">{visible.length} of {eligible.length} shown, {selected.size} selected</span>
       <span class="spacer"></span>
       <button type="button" class="btn btn-sm" onclick={selectVisible}>Select shown</button>
       <button type="button" class="btn btn-sm btn-ghost" onclick={clearSelection}>None</button>
@@ -139,17 +153,19 @@
     {:else}
       <div class="list" role="list" aria-label="Saved sessions">
         {#each visible as s (s.file)}
-          <label class="row" role="listitem">
-            <input
-              type="checkbox"
-              checked={selected.has(s.file)}
-              onchange={() => toggle(s.file)}
-            />
-            <span class="text">
-              <span class="title">{label(s)}</span>
-              <span class="meta">{s.cwdFolder} · {size(s)} · {when(s)}</span>
-            </span>
-          </label>
+          <div role="listitem">
+            <label class="row">
+              <input
+                type="checkbox"
+                checked={selected.has(s.file)}
+                onchange={() => toggle(s.file)}
+              />
+              <span class="text">
+                <span class="title">{label(s)}</span>
+                <span class="meta">{s.cwdFolder} · {size(s)} · {when(s)}</span>
+              </span>
+            </label>
+          </div>
         {/each}
       </div>
     {/if}
@@ -208,16 +224,10 @@
     background: var(--inset);
     flex: none;
   }
-  .ages button {
-    padding: 0 var(--s-2);
+  .ages :global(.seg button) {
     min-height: 26px;
     font-size: var(--fs-xs);
-    border-radius: calc(var(--r-md) - 2px);
-    color: var(--ink-2);
-  }
-  .ages button.on {
-    background: var(--accent);
-    color: var(--accent-ink);
+    padding: 0 var(--s-2);
   }
   .sel-row {
     display: flex;

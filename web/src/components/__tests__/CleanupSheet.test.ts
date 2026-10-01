@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import * as endpoints from '../../lib/api/endpoints';
-import { pins, sessionsStore } from '../../lib/state';
+import { pins, sessionsStore, ui } from '../../lib/state';
 import CleanupSheet from '../CleanupSheet.svelte';
 import { buttonNamed, cleanup, render, settle } from './mount';
 import type { SavedSession } from '../../lib/api/types';
@@ -32,6 +32,7 @@ describe('CleanupSheet', () => {
     sessionsStore.saved = [saved(), saved({ file: '/s/b.jsonl', title: 'real work', cwdFolder: 'other' })];
     const del = vi.spyOn(endpoints.sessions, 'deleteSaved').mockResolvedValue({ ok: true });
     const refresh = vi.spyOn(sessionsStore, 'refresh').mockResolvedValue();
+    vi.spyOn(ui, 'confirm').mockResolvedValue(true);
     const { target } = render(CleanupSheet, { onclose: () => {} });
     await settle();
 
@@ -41,10 +42,41 @@ describe('CleanupSheet', () => {
     const delBtn = buttonNamed(target, /Delete 1 selected/);
     expect(delBtn).toBeTruthy();
     delBtn!.click();
-    flushSync();
     await settle();
     expect(del).toHaveBeenCalledWith('/s/a.jsonl');
     expect(refresh).toHaveBeenCalled();
+  });
+
+  it('keeps failed deletions selected and confirms first', async () => {
+    sessionsStore.saved = [saved({ file: '/s/a.jsonl', title: 'one' }), saved({ file: '/s/b.jsonl', title: 'two' })];
+    const del = vi.spyOn(endpoints.sessions, 'deleteSaved')
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error('that session is running; stop it first'));
+    const confirmSpy = vi.spyOn(ui, 'confirm').mockResolvedValue(true);
+    const { target } = render(CleanupSheet, { onclose: () => {} });
+    await settle();
+    target.querySelectorAll('input[type="checkbox"]').forEach((c) => {
+      (c as HTMLInputElement).click();
+      flushSync();
+    });
+    buttonNamed(target, /Delete 2 selected/)!.click();
+    await settle();
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(del).toHaveBeenCalledTimes(2);
+    // the failed one stays selected for retry
+    expect(target.querySelector('input[type="checkbox"]:checked')).toBeTruthy();
+  });
+
+  it('does not delete when confirmation is dismissed', async () => {
+    const del = vi.spyOn(endpoints.sessions, 'deleteSaved').mockResolvedValue({ ok: true });
+    vi.spyOn(ui, 'confirm').mockResolvedValue(false);
+    const { target } = render(CleanupSheet, { onclose: () => {} });
+    await settle();
+    listIn(target).click();
+    flushSync();
+    buttonNamed(target, /Delete 1 selected/)!.click();
+    await settle();
+    expect(del).not.toHaveBeenCalled();
   });
 
   it('age filter hides recent sessions', async () => {

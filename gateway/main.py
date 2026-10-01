@@ -692,18 +692,25 @@ async def delete_saved_session(file: str = Query(min_length=1)):
     rp = Path(file).expanduser().resolve()
     if not (rp.is_file() and ((_SEARCH_ROOT.resolve() in rp.parents) or (_ARCHIVE_ROOT.resolve() in rp.parents))):
         raise HTTPException(422, "file must be a saved session transcript")
-    for sess in get_manager().sessions.values():
-        if sess.omp_session_file and Path(sess.omp_session_file).resolve() == rp:
-            raise HTTPException(409, "that session is running; stop it first")
-    rp.unlink()
+    if rp.suffix not in (".jsonl", ".gz"):
+        raise HTTPException(422, "file must be a saved session transcript (.jsonl)")
+    await get_manager().reap_dead()
+    if get_manager().find_by_file(str(rp)) is not None:
+        raise HTTPException(409, "that session is running; stop it first")
+    try:
+        rp.unlink()
+    except FileNotFoundError:
+        raise HTTPException(404, "session file not found")
+    except OSError as e:
+        raise HTTPException(500, f"failed to delete session file: {e}")
     return {"ok": True}
 
 
-@app.post("/api/sessions/vacuum")
-async def vacuum_sessions():
-    """Sweep storage litter the way scripts/omp-sessions.py does: bucket dirs
-    with no transcript files left under them, and custom-session-files
-    pointers whose target no longer exists. Never touches transcripts."""
+def _vacuum_sync() -> dict:
+    """Mirror scripts/omp-sessions.py exactly: a bucket is litter only when it
+    contains NO files of ANY kind (not just transcripts - omp extensions drop
+    notes and metadata in there), and only regular pointer files with missing
+    targets are removed. Unreadable pointers are left alone."""
     import shutil
 
     from .search import SESSIONS_DIR
@@ -711,24 +718,40 @@ async def vacuum_sessions():
     removed_dirs = removed_pointers = 0
     if SESSIONS_DIR.is_dir():
         for child in list(SESSIONS_DIR.iterdir()):
-            if not child.is_dir():
+            if not child.is_dir() or child.is_symlink():
                 continue
-            has_files = any(child.rglob("*.jsonl*"))
-            if not has_files:
-                shutil.rmtree(child, ignore_errors=True)
-                if not child.exists():
-                    removed_dirs += 1
+            has_files = any(files for _, _, files in os.walk(child))
+            if has_files:
+                continue
+            try:
+                shutil.rmtree(child)
+                removed_dirs += 1
+            except OSError:
+                pass
     pointers_dir = OMP_AGENT_DIR / "custom-session-files"
     if pointers_dir.is_dir():
         for ptr in list(pointers_dir.iterdir()):
+            if not ptr.is_file() or ptr.is_symlink():
+                continue
             try:
                 target = ptr.read_text(encoding="utf-8", errors="replace").strip()
             except OSError:
-                target = ""
+                continue  # unreadable: leave it alone rather than guess
             if not target or not Path(target).is_file():
-                ptr.unlink(missing_ok=True)
-                removed_pointers += 1
+                try:
+                    ptr.unlink(missing_ok=True)
+                    removed_pointers += 1
+                except OSError:
+                    pass
     return {"removedDirs": removed_dirs, "removedPointers": removed_pointers}
+
+
+@app.post("/api/sessions/vacuum")
+async def vacuum_sessions():
+    """Sweep storage litter the way scripts/omp-sessions.py does: bucket dirs
+    with no files left under them, and custom-session-files pointers whose
+    target no longer exists. Never touches transcripts or unreadable files."""
+    return await asyncio.to_thread(_vacuum_sync)
 
 
 @app.post("/api/sessions")
