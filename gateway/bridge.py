@@ -43,6 +43,7 @@ if DEFAULT_APPROVAL_MODE not in APPROVAL_MODES:
 UI_DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
 
 STDOUT_LINE_LIMIT = 64 * 1024 * 1024  # bytes per stdout line from omp
+_MAX_CHUNK_GROUPS = 64  # unfinished rpc_chunk reassembly buffers before eviction
 
 # prompt_result statuses that mark a turn failed or aborted (ok = 0 in the ledger).
 _TURN_FAILURE_STATUSES = ("error", "failed", "aborted")
@@ -219,17 +220,24 @@ class OmpSession:
     async def start(self, startup_timeout: float = 60.0) -> None:
         self._stderr_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_fh = open(self._stderr_path, "ab")
-        self.proc = await asyncio.create_subprocess_exec(
-            *self._build_args(),
-            cwd=self.cwd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=stderr_fh,
-            # omp writes one JSON object per line and some (the model catalog,
-            # big tool results) exceed asyncio's 64 KiB default; overrunning it
-            # crashes the reader and the session looks dead.
-            limit=STDOUT_LINE_LIMIT,
-        )
+        try:
+            self.proc = await asyncio.create_subprocess_exec(
+                *self._build_args(),
+                cwd=self.cwd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=stderr_fh,
+                # omp writes one JSON object per line and some (the model catalog,
+                # big tool results) exceed asyncio's 64 KiB default; overrunning it
+                # crashes the reader and the session looks dead.
+                limit=STDOUT_LINE_LIMIT,
+            )
+        except BaseException:
+            stderr_fh.close()
+            raise
+        # The child keeps its own dup of the fd; holding the parent handle open
+        # for the session's life leaks one fd per spawn attempt.
+        stderr_fh.close()
         self._reader_task = asyncio.create_task(self._reader(), name=f"omp-reader-{self.gw_id}")
         try:
             await asyncio.wait_for(self.ready, startup_timeout)
@@ -327,7 +335,7 @@ class OmpSession:
             # None when no turn is open (stray event) or agent_end never ran;
             # either way there is nothing to record.
             if not self._turn_flushed and self._turn_acc is not None:
-                self._ledger_flush()
+                await self._ledger_flush()
         elif ftype == "agent_end":
             self.streaming = False
             if not self._turn_flushed:
@@ -343,7 +351,7 @@ class OmpSession:
                 # The row waits for prompt_result; the timer is the fallback
                 # if it never arrives.
                 self._turn_flush_timer = asyncio.get_running_loop().call_later(
-                    _LEDGER_PROMPT_GRACE_S, self._ledger_flush)
+                    _LEDGER_PROMPT_GRACE_S, self._ledger_flush_soon)
             if self.pending_ui:
                 # omp abandons open dialogs when a turn ends (abort, error).
                 for rid in list(self.pending_ui):
@@ -359,6 +367,11 @@ class OmpSession:
         cid = obj.get("chunkId")
         buf = self._chunks.get(cid)
         if buf is None:
+            if len(self._chunks) >= _MAX_CHUNK_GROUPS:
+                # A chunk dropped mid-frame leaves its group unfinished forever
+                # (parts are megabyte-scale base64); evict the oldest instead of
+                # growing without bound over a long-lived session.
+                self._chunks.pop(next(iter(self._chunks)), None)
             buf = {
                 "count": obj.get("count"),
                 "byteLength": obj.get("byteLength"),
@@ -444,8 +457,19 @@ class OmpSession:
             self._turn_flush_timer.cancel()
             self._turn_flush_timer = None
 
-    def _ledger_flush(self) -> None:
-        """Write the finished turn as ONE row. Never raises, never blocks a turn."""
+    def _ledger_flush_soon(self) -> None:
+        """Schedule the flush as a task: safe from call_later timers and from
+        non-async exit paths, and the write itself runs in a thread."""
+        try:
+            asyncio.get_running_loop().create_task(self._ledger_flush())
+        except RuntimeError:
+            pass  # no loop left (interpreter shutdown); the row is lost, accepted
+
+    async def _ledger_flush(self) -> None:
+        """Write the finished turn as ONE row. Never raises, never blocks a turn.
+
+        The SQLite write runs in a worker thread: this is called from the stdout
+        reader's dispatch path, which must never do synchronous disk I/O."""
         self._cancel_flush_timer()
         if self._turn_flushed:
             return
@@ -454,11 +478,13 @@ class OmpSession:
             acc = self._turn_acc or {"input": 0, "output": 0, "cache_read": 0,
                                      "cache_write": 0, "cost": 0.0, "model": None}
             provider, model = split_model_id(acc.get("model"))
-            record_turn(gw_id=self.gw_id, session_name=self.omp_session_name, cwd=self.cwd,
-                        provider=provider, model=model,
-                        input_tokens=acc["input"], output_tokens=acc["output"],
-                        cache_read=acc["cache_read"], cache_write=acc["cache_write"],
-                        cost_usd=acc["cost"], ok=not self._turn_failed)
+            await asyncio.to_thread(
+                record_turn,
+                gw_id=self.gw_id, session_name=self.omp_session_name, cwd=self.cwd,
+                provider=provider, model=model,
+                input_tokens=acc["input"], output_tokens=acc["output"],
+                cache_read=acc["cache_read"], cache_write=acc["cache_write"],
+                cost_usd=acc["cost"], ok=not self._turn_failed)
         except Exception:
             log.exception("[%s] ledger flush failed", self.gw_id)
         finally:
@@ -524,8 +550,12 @@ class OmpSession:
             self.pending.pop(f"late:{rid}", None)
             try:
                 await asyncio.wait_for(late_fut, 0.25)
-            except (asyncio.TimeoutError, RpcError):
+            except asyncio.TimeoutError:
                 pass
+            except RpcError as e:
+                # The ack already went out, so the caller can't get an error
+                # from here; log it so late failures aren't invisible.
+                log.warning("[%s] late error for %s: %s", self.gw_id, type_, e)
         if not resp.get("success"):
             raise RpcError(resp.get("command", type_), resp.get("error", "unknown"), resp.get("code"))
         return resp.get("data")
@@ -537,7 +567,12 @@ class OmpSession:
         """Send a prompt. wait=True resolves when the agent turn ends."""
         cmd = "steer" if steer else "prompt"
         extra = {"images": images} if images else {}
-        data = await self.command(cmd, message=message, timeout=30, **extra)
+        # late_errors: a same-id error response can arrive after the ack (omp
+        # accepts the prompt, then fails to start the turn). Without this the
+        # error finds no pending future and is discarded with nothing in the
+        # log; the turn failure itself still surfaces via prompt_result events,
+        # which is what the client Retry chip keys on.
+        data = await self.command(cmd, message=message, timeout=30, late_errors=True, **extra)
         if wait:
             loop = asyncio.get_running_loop()
             waiter = loop.create_future()
@@ -635,8 +670,11 @@ class OmpSession:
         self.exited = True
         if self.proc is not None:
             self.exit_code = self.proc.returncode
-        # A dead child never completes its turn: no pending fallback flush.
-        self._cancel_flush_timer()
+        # A dead child can still have a finished-but-unflushed turn (exit inside
+        # the prompt_result grace window): write the row instead of dropping it.
+        # acc None means no message ever arrived; a zero-token row is junk.
+        if not self._turn_flushed and self._turn_acc is not None:
+            self._ledger_flush_soon()
         for fut in list(self.pending.values()):
             if not fut.done():
                 fut.set_exception(ProcessDead(f"omp exited (code {self.exit_code})"))
@@ -763,20 +801,33 @@ class SessionManager:
             self.sessions.pop(gid, None)
 
 
+def _safe_stat(p: Path) -> os.stat_result | None:
+    """stat that survives a file vanishing mid-scan (omp gc runs concurrently)."""
+    try:
+        return p.stat()
+    except OSError:
+        return None
+
+
 def scan_saved_sessions(limit: int = 200) -> list[dict]:
     """Saved omp sessions on disk, newest first, with a light title parse."""
     results: list[dict] = []
     root = OMP_AGENT_DIR / "sessions"
     if not root.is_dir():
         return results
-    files = sorted(root.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+    stats: list[tuple[Path, os.stat_result]] = []
+    for p in root.rglob("*.jsonl"):
+        st = _safe_stat(p)
+        if st is not None:
+            stats.append((p, st))
+    stats.sort(key=lambda t: t[1].st_mtime, reverse=True)
     live_files = {s.omp_session_file for s in _manager.sessions.values() if s.omp_session_file}
-    for p in files:
+    for p, st in stats[:limit]:
         p = p.resolve()
         entry = {
             "file": str(p),
-            "mtime": p.stat().st_mtime,
-            "sizeBytes": p.stat().st_size,
+            "mtime": st.st_mtime,
+            "sizeBytes": st.st_size,
             "cwdFolder": p.parent.name,
             "cwd": None,
             "cwdExists": None,

@@ -11,6 +11,7 @@ import base64
 import binascii
 import contextlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -54,6 +55,8 @@ STATIC_DIR = PROJECT_DIR / "static"
 WEB_DIST = Path(os.environ.get("OMPGW_WEB_DIST") or PROJECT_DIR / "web" / "dist").expanduser().resolve()
 CONFIG_FILE = OMP_AGENT_DIR / "config.yml"
 STARTED_AT = time.time()
+
+log = logging.getLogger("ohmpi-gateway.main")
 
 MAX_SESSIONS = int(os.environ.get("OMPGW_MAX_SESSIONS", "8"))
 IDLE_REAP_SEC = int(os.environ.get("OMPGW_IDLE_REAP_SEC", str(6 * 3600)))
@@ -382,26 +385,42 @@ async def models(q: str | None = None):
 
 _MODELS_TTL_SEC = 600
 _models_cache: tuple[float, dict] | None = None
-_models_lock = asyncio.Lock()
+_models_task: asyncio.Task | None = None
+
+
+async def _refresh_models() -> dict:
+    out = await acli("models", "--json", timeout=180)
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        raise HTTPException(502, "omp models --json returned invalid JSON")
+    if not isinstance(data, dict):
+        data = {"models": data}
+    global _models_cache
+    _models_cache = (time.monotonic(), data)
+    return data
 
 
 @app.get("/api/catalog/models")
 async def catalog_models(refresh: int = 0):
     """`omp models --json`, cached for 10 minutes. The RPC get_available_models
-    takes minutes, so clients should use this instead."""
-    global _models_cache
-    async with _models_lock:
-        now = time.monotonic()
-        if refresh or _models_cache is None or now - _models_cache[0] > _MODELS_TTL_SEC:
-            out = await acli("models", "--json", timeout=180)
-            try:
-                data = json.loads(out)
-            except json.JSONDecodeError:
-                raise HTTPException(502, "omp models --json returned invalid JSON")
-            if not isinstance(data, dict):
-                data = {"models": data}
-            _models_cache = (now, data)
+    takes minutes, so clients should use this instead. Refreshes are single-flight
+    (concurrent callers coalesce onto one subprocess) and never block a cache
+    hit: the lock-used-to-wrap-the-subprocess here made every hit queue behind
+    an in-flight refresh for up to 3 minutes."""
+    global _models_task
+    now = time.monotonic()
+    if not refresh and _models_cache is not None and now - _models_cache[0] <= _MODELS_TTL_SEC:
         return _models_cache[1]
+    if _models_task is None or _models_task.done():
+        _models_task = asyncio.create_task(_refresh_models())
+    try:
+        return await _models_task
+    except Exception:
+        # Stale-while-error: prefer the last good catalog over a 502.
+        if _models_cache is not None:
+            return _models_cache[1]
+        raise
 
 
 @app.get("/api/skills")
@@ -560,20 +579,21 @@ async def create_session(request: Request):
         existing = get_manager().find_by_file(resume)
         if existing is not None:
             return {**existing.info(), "alreadyLive": True}
-    if len(get_manager().sessions) >= MAX_SESSIONS:
-        raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
-    cwd = body.get("cwd")
-    cwd_fallback = False
-    if not cwd and resume:
-        saved_cwd = read_session_cwd(resume)
-        if saved_cwd and Path(saved_cwd).expanduser().is_dir():
-            cwd = saved_cwd
-        else:
-            cwd_fallback = True
-    cwd = cwd or os.path.expanduser("~/projects")
-    sess = await get_manager().create(cwd=cwd, model=body.get("model") or None,
-                                      thinking=thinking or None, approval_mode=approval_mode,
-                                      session_file=resume, advisor=advisor)
+    async with _spawn_lock:
+        if len(get_manager().sessions) >= MAX_SESSIONS:
+            raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
+        cwd = body.get("cwd")
+        cwd_fallback = False
+        if not cwd and resume:
+            saved_cwd = read_session_cwd(resume)
+            if saved_cwd and Path(saved_cwd).expanduser().is_dir():
+                cwd = saved_cwd
+            else:
+                cwd_fallback = True
+        cwd = cwd or os.path.expanduser("~/projects")
+        sess = await get_manager().create(cwd=cwd, model=body.get("model") or None,
+                                          thinking=thinking or None, approval_mode=approval_mode,
+                                          session_file=resume, advisor=advisor)
     return {**sess.info(), **({"cwdFallback": True} if cwd_fallback else {})}
 
 
@@ -744,6 +764,26 @@ def _model_flag(value) -> str | None:
 # One branch at a time per session: omp's branch mutates the live process, so
 # concurrent forks on one session would double-branch from the same file.
 _fork_locks: dict[str, asyncio.Lock] = {}
+# Serializes every check-then-spawn section (create + fork): the MAX_SESSIONS
+# check and manager.create() must not interleave across requests, or two
+# concurrent POSTs both pass the cap check and overshoot it.
+_spawn_lock = asyncio.Lock()
+
+# Keys command() treats as its own call semantics; a client frame carrying them
+# would silently override the gateway's timeout or correlation behavior.
+_CMD_RESERVED_KEYS = ("timeout", "late_errors")
+
+
+def _command_params(frame: dict) -> dict:
+    """Whitelist client-supplied RPC parameters. Non-identifier keys would
+    raise TypeError out of **params (a 500 on /rpc, a dead WS pump on the
+    socket); reserved keys would hijack command() internals."""
+    params = {}
+    for k, v in frame.items():
+        if not k.isidentifier() or k in _CMD_RESERVED_KEYS:
+            raise ValueError(f"invalid RPC parameter key: {k!r}")
+        params[k] = v
+    return params
 
 
 @app.post("/api/sessions/{gw_id}/fork")
@@ -756,55 +796,81 @@ async def fork(gw_id: str, request: Request):
     entry_id = body.get("entryId")
     if not isinstance(entry_id, str) or not entry_id:
         raise HTTPException(422, "entryId required")
-    async with _fork_locks.setdefault(gw_id, asyncio.Lock()):
-        # A concurrent fork may have stopped this session while we waited.
-        sess = get_session_or_404(gw_id)
-        if sess.is_busy():
-            raise HTTPException(409, "session is busy; wait for the turn to end before forking")
-        # Validate against the live entries: omp would reject non-user entries with
-        # "Invalid entry ID for branching", but the 422 says what the client did wrong.
-        for e in (await sess.entries()).get("entries") or []:
-            if isinstance(e, dict) and e.get("id") == entry_id:
-                msg = e.get("message") if isinstance(e.get("message"), dict) else {}
-                if e.get("type") == "message" and msg.get("role") == "user":
-                    break
-                raise HTTPException(422, "entryId is not a user message entry")
-        else:
-            raise HTTPException(422, "unknown entryId")
-        # A fork stops the parent and registers the child: net-zero. Reap dead
-        # sessions first, then discount the parent being replaced, so a fork at
-        # the cap only 429s when it would really add a session.
-        await get_manager().reap_dead()
-        m = get_manager()
-        if len(m.sessions) - (1 if gw_id in m.sessions else 0) >= MAX_SESSIONS:
-            raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
-        old_file = sess.omp_session_file
-        if not old_file:
-            # omp only reports its session file on get_state and
-            # session_info_update events; a fork target always has entries and
-            # therefore a file on disk, so fetch the state once to anchor the
-            # branched-file scan below.
-            with contextlib.suppress(RpcError, ProcessDead):
-                await sess.get_state()
+    lock = _fork_locks.setdefault(gw_id, asyncio.Lock())
+    try:
+        async with lock:
+            # A concurrent fork may have stopped this session while we waited.
+            sess = get_session_or_404(gw_id)
+            if sess.is_busy():
+                raise HTTPException(409, "session is busy; wait for the turn to end before forking")
+            # Validate against the live entries: omp would reject non-user entries with
+            # "Invalid entry ID for branching", but the 422 says what the client did wrong.
+            for e in (await sess.entries()).get("entries") or []:
+                if isinstance(e, dict) and e.get("id") == entry_id:
+                    msg = e.get("message") if isinstance(e.get("message"), dict) else {}
+                    if e.get("type") == "message" and msg.get("role") == "user":
+                        break
+                    raise HTTPException(422, "entryId is not a user message entry")
+            else:
+                raise HTTPException(422, "unknown entryId")
+            # A fork stops the parent and registers the child: net-zero. Reap dead
+            # sessions first, then discount the parent being replaced, so a fork at
+            # the cap only 429s when it would really add a session.
+            await get_manager().reap_dead()
+            m = get_manager()
             old_file = sess.omp_session_file
-        branch_started = time.time()
-        data = await sess.command("branch", entryId=entry_id, timeout=30)
-        if isinstance(data, dict) and data.get("cancelled"):
-            raise RpcError("branch", "cancelled by an extension")
-        new_file = await _branched_file(sess, old_file, data, since=branch_started)
-        # Stop before resuming: omp holds the branched entries in memory and
-        # persists them on exit, so the resume process must start after the old
-        # one has flushed the file (the reverse order reads an empty transcript).
-        with contextlib.suppress(KeyError):
-            await get_manager().stop(gw_id)
-        # The CURRENT model/thinking, not the launch flags: mid-session /model
-        # and /thinking changes must survive the fork.
-        new = await get_manager().create(cwd=sess.cwd,
-                                         model=_model_flag(sess.model) or sess.requested_model,
-                                         thinking=_model_flag(sess.thinking_level) or sess.requested_thinking,
-                                         approval_mode=sess.approval_mode,
-                                         session_file=new_file,
-                                         advisor=sess.advisor)
+            if not old_file:
+                # omp only reports its session file on get_state and
+                # session_info_update events; a fork target always has entries and
+                # therefore a file on disk, so fetch the state once to anchor the
+                # branched-file scan below.
+                with contextlib.suppress(RpcError, ProcessDead):
+                    await sess.get_state()
+                old_file = sess.omp_session_file
+            branch_started = time.time()
+            data = await sess.command("branch", entryId=entry_id, timeout=30)
+            if isinstance(data, dict) and data.get("cancelled"):
+                raise RpcError("branch", "cancelled by an extension")
+            new_file = await _branched_file(sess, old_file, data, since=branch_started)
+            # Stop before resuming: omp holds the branched entries in memory and
+            # persists them on exit, so the resume process must start after the old
+            # one has flushed the file (the reverse order reads an empty transcript).
+            # Held through the respawn with _spawn_lock so the cap stays exact.
+            async with _spawn_lock:
+                if len(m.sessions) - (1 if gw_id in m.sessions else 0) >= MAX_SESSIONS:
+                    raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
+                with contextlib.suppress(KeyError):
+                    await get_manager().stop(gw_id)
+                # The CURRENT model/thinking, not the launch flags: mid-session /model
+                # and /thinking changes must survive the fork.
+                try:
+                    new = await get_manager().create(cwd=sess.cwd,
+                                                     model=_model_flag(sess.model) or sess.requested_model,
+                                                     thinking=_model_flag(sess.thinking_level) or sess.requested_thinking,
+                                                     approval_mode=sess.approval_mode,
+                                                     session_file=new_file,
+                                                     advisor=sess.advisor)
+                except Exception as exc:
+                    # Compensation: the parent process is already stopped, and its
+                    # branched transcript was flushed to old_file on exit. Restore
+                    # the parent from disk instead of leaving the client with no
+                    # live session at all. If the restore also fails, the 500 is
+                    # honest: nothing we can respawn from is left.
+                    log.exception("[%s] fork respawn failed; restoring parent from %s", gw_id, old_file)
+                    restored = await get_manager().create(cwd=sess.cwd,
+                                                          model=_model_flag(sess.model) or sess.requested_model,
+                                                          thinking=_model_flag(sess.thinking_level) or sess.requested_thinking,
+                                                          approval_mode=sess.approval_mode,
+                                                          session_file=old_file,
+                                                          advisor=sess.advisor)
+                    return {"gwId": restored.gw_id, "forkedFrom": old_file,
+                            "text": None,
+                            "forkError": f"fork failed, parent restored as a new session: {exc}"}
+    finally:
+        # Drop the per-session lock once no other request is queued on it, so
+        # the dict doesn't grow one entry per forked session forever.
+        if _fork_locks.get(gw_id) is lock and not lock.locked():
+            _fork_locks.pop(gw_id, None)
     # omp returns the branched entry's text ("selectedText"): the fork carries
     # history strictly BEFORE that message, and clients prefill the composer
     # with it for a re-send. A root entry produces an empty session instead
@@ -960,7 +1026,11 @@ async def raw_rpc(gw_id: str, request: Request):
         raise HTTPException(422, "type required")
     body.pop("id", None)
     timeout = float(body.pop("timeout", 60))
-    return {"data": await get_session_or_404(gw_id).command(ctype, timeout=min(timeout, 300), **body)}
+    try:
+        params = _command_params(body)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"data": await get_session_or_404(gw_id).command(ctype, timeout=min(timeout, 300), **params)}
 
 
 @app.get("/api/sessions/{gw_id}/ui")
@@ -1099,7 +1169,14 @@ async def ws_session(ws: WebSocket, gw_id: str, after: int = 0):
             client_id = frame.pop("id", None)
             ctype = frame.pop("type")
             try:
-                data = await sess.command(ctype, timeout=60, **frame)
+                params = _command_params(frame)
+            except ValueError as e:
+                await send({"seq": 0, "event": {"type": "rpc_response", "id": client_id,
+                                                "command": ctype, "success": False,
+                                                "error": str(e)}})
+                continue
+            try:
+                data = await sess.command(ctype, timeout=60, **params)
                 await send({"seq": 0, "event": {"type": "rpc_response", "id": client_id,
                                                 "command": ctype, "success": True, "data": data}})
             except (RpcError, ProcessDead) as e:
