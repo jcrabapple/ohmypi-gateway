@@ -124,8 +124,8 @@
 <Sheet open={true} {onclose} title="Clean up sessions" size="md">
   <div class="cleanup">
     <p class="hint">
-      Delete saved transcripts you no longer want. Running sessions are never
-      offered, and deleting a transcript cannot be undone.
+      Delete saved transcripts you no longer want. Running and pinned sessions
+      are never offered, and deleting a transcript cannot be undone.
     </p>
 
     <div class="bar">
@@ -142,7 +142,7 @@
     </div>
 
     <div class="sel-row">
-      <span class="count">{visible.length} of {eligible.length} shown, {selected.size} selected</span>
+      <span class="count">{visible.length} of {eligible.length} shown{pins.files.size ? `, ${pins.files.size} pinned` : ''}, {selected.size} selected</span>
       <span class="spacer"></span>
       <button type="button" class="btn btn-sm" onclick={selectVisible}>Select shown</button>
       <button type="button" class="btn btn-sm btn-ghost" onclick={clearSelection}>None</button>

@@ -16,7 +16,7 @@
   const empty = $derived(
     sessionsStore.loaded &&
       !groups.needsYou.length && !groups.review.length && !groups.running.length && !groups.idle.length &&
-      !groups.history.length,
+      !groups.pinned.length && !groups.history.length,
   );
   // Rows show "5m" style stamps; one shared tick keeps them current without a timer per row.
   let now = $state(Date.now());
@@ -32,7 +32,7 @@
     { key: 'idle', label: 'Idle', status: 'idle' },
   ];
 
-  /** Live rows carry the review pin actions; saved rows have no gateway id, so no menu. */
+  /** Live rows carry review actions; saved rows carry pin/unpin actions. */
   function rowMenu(s: SessionInfo): MenuItem[] {
     if (reviewed.needsReview.has(s.gwId)) {
       return [{ id: 'unpin', label: 'Unpin', icon: 'x', onselect: () => reviewed.unflag(s.gwId) }];

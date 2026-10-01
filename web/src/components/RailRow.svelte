@@ -37,7 +37,7 @@
     </span>
     <span class="text">
       <span class="title truncate">
-        {#if pinned}<span class="pinned-mark" title="Pinned"><Icon name="pin" size={12} /></span>{/if}
+        {#if pinned}<span class="pinned-mark" title="Pinned" role="img" aria-label="Pinned"><Icon name="pin" size={12} /></span>{/if}
         {#if forked}<span class="fork" title="Forked from another session"><Icon name="fork" size={12} /></span>{/if}
         <InlineCode text={title} />
       </span>
@@ -50,7 +50,7 @@
       bind:this={menuBtn}
       type="button"
       class="icon-btn hit kebab"
-      aria-label="Row menu"
+      aria-label="Session options for {title}"
       aria-haspopup="menu"
       aria-expanded={menuOpen}
       onclick={() => (menuOpen = !menuOpen)}

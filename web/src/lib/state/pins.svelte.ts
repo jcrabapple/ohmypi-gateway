@@ -28,6 +28,11 @@ export class PinStore {
     device.set(PIN_KEY, [...this.files]);
   }
 
+  clear(): void {
+    this.files = new Set();
+    device.set(PIN_KEY, []);
+  }
+
   /** True when the file must be spared by session cleanup. */
   protectedFromCleanup(file: string): boolean {
     return this.files.has(file);

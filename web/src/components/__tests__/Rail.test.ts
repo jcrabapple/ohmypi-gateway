@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { flushSync } from 'svelte';
 import type { SavedSession, SessionInfo } from '../../lib/api/types';
 import { storageKey } from '../../lib/platform/storage';
-import { reviewed, sessionsStore } from '../../lib/state';
+import { pins, reviewed, sessionsStore } from '../../lib/state';
 import Rail from '../Rail.svelte';
 import { cleanup, render, settle } from './mount';
 
@@ -31,6 +32,7 @@ afterEach(() => {
   sessionsStore.saved = [];
   reviewed.needsReview = new Set();
   reviewed.done = new Set();
+  pins.clear();
   localStorage.clear();
 });
 
@@ -71,7 +73,7 @@ describe('Rail', () => {
     expect(target.querySelector('.glyph.review')).not.toBeNull();
 
     const row = [...target.querySelectorAll('.row')].find((r) => r.textContent?.includes('pinned'))!;
-    row.querySelector<HTMLButtonElement>('button[aria-label="Row menu"]')!.click();
+    row.querySelector<HTMLButtonElement>('button[aria-label^="Session options for"]')!.click();
     await settle();
     expect([...target.querySelectorAll('button')].some((b) => b.textContent?.includes('Unpin'))).toBe(true);
   });
@@ -79,7 +81,7 @@ describe('Rail', () => {
   it('offers Mark ready for review in unpinned rows and runs it', async () => {
     sessionsStore.live = [live('plain')];
     const { target } = render(Rail, {});
-    target.querySelector<HTMLButtonElement>('button[aria-label="Row menu"]')!.click();
+    target.querySelector<HTMLButtonElement>('button[aria-label^="Session options for"]')!.click();
     await settle();
     const item = [...target.querySelectorAll('button')].find((b) => b.textContent?.includes('Mark ready for review'));
     expect(item).toBeDefined();
@@ -87,5 +89,34 @@ describe('Rail', () => {
     await settle();
     expect(reviewed.needsReview.has('plain')).toBe(true);
     expect(JSON.parse(localStorage.getItem(storageKey('device', 'ompgw-needs-review'))!)).toEqual(['plain']);
+  });
+});
+
+describe('Rail pinned sessions', () => {
+  it('renders pinned saved sessions in a Pinned section above history and offers unpin', async () => {
+    sessionsStore.saved = [saved('/s/pin.jsonl', 2), saved('/s/other.jsonl', 10)];
+    pins.toggle('/s/pin.jsonl');
+    const { target } = render(Rail, {});
+    const sections = [...target.querySelectorAll('h2.eyebrow span:first-child')].map((h) => h.textContent);
+    expect(sections.indexOf('Pinned')).toBeGreaterThanOrEqual(0);
+    expect(sections.indexOf('Pinned')).toBeLessThan(sections.indexOf('Earlier'));
+    expect(target.textContent).toContain('title /s/pin.jsonl');
+    const unpin = [...target.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('title /s/pin.jsonl'));
+    expect(unpin).toBeTruthy();
+    unpin!.click();
+    await settle();
+    const item = [...target.querySelectorAll('button')].find((b) => b.textContent?.includes('Unpin from list'));
+    expect(item).toBeTruthy();
+    item!.click();
+    await settle();
+    expect(pins.isPinned('/s/pin.jsonl')).toBe(false);
+  });
+
+  it('does not show the empty state when only pinned sessions exist', () => {
+    sessionsStore.saved = [saved('/s/pin.jsonl', 2)];
+    pins.toggle('/s/pin.jsonl');
+    const { target } = render(Rail, {});
+    expect(target.textContent).not.toContain('No sessions yet');
+    expect(target.textContent).toContain('Pinned');
   });
 });
