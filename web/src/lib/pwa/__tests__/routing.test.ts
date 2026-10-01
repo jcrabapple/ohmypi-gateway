@@ -76,7 +76,13 @@ describe('service worker script', () => {
 
   it('never mentions the live endpoints outside the router', () => {
     const code = sw.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
-    for (const p of ['/api', '/auth', '/omp-ws', '/healthz']) expect(code).not.toContain(p);
+    for (const p of ['/auth', '/omp-ws', '/healthz']) expect(code).not.toContain(p);
+    // /api is banned for ROUTING: the fetch handler must never touch live
+    // endpoints. The pushsubscriptionchange handler legitimately CALLS
+    // /api/push/* in the background to re-register rotated subscriptions -
+    // that is a fetch from the worker, not the worker routing page traffic.
+    const withoutPushRebind = code.split("addEventListener('pushsubscriptionchange'")[0];
+    expect(withoutPushRebind).not.toContain('/api');
   });
 });
 

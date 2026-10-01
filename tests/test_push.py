@@ -8,6 +8,7 @@ Run: .venv/bin/python tests/test_push.py
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sys
 import tempfile
@@ -20,11 +21,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import gateway.push as push_mod  # noqa: E402
 from gateway.bridge import OmpSession  # noqa: E402
 
-SUB = {"endpoint": "https://push.example.com/a", "keys": {"p256dh": "k", "auth": "a"}}
-SUB2 = {"endpoint": "https://push.example.com/b", "keys": {"p256dh": "k2", "auth": "a2"}}
+# A well-formed 65-byte uncompressed P-256 point and a 16-byte auth secret,
+# base64url (what a real browser PushSubscription carries).
+_POINT = bytes([0x04]) + bytes(((i * 7 + 1) % 256 for i in range(64)))
+P256DH = base64.urlsafe_b64encode(_POINT).rstrip(b"=").decode()
+AUTH = base64.urlsafe_b64encode(bytes(range(16))).rstrip(b"=").decode()
+KEYS = {"p256dh": P256DH, "auth": AUTH}
+SUB = {"endpoint": "https://push.example.com/a", "keys": KEYS}
+SUB2 = {"endpoint": "https://push.example.com/b", "keys": KEYS}
 
 
-class PushTest(unittest.TestCase):
+class PushTest(unittest.IsolatedAsyncioTestCase):
+    """IsolatedAsyncioTestCase on purpose: async tests on plain TestCase never
+    run their assertions (gate round 1 shipped two tests that no-op'd)."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="ompgw-push-")
         self.patchers = [
@@ -47,11 +57,30 @@ class PushTest(unittest.TestCase):
         push_mod._vapid = None  # force a reload from disk
         self.assertEqual(push_mod.public_key(), first)
 
+    def test_vapid_object_survives_reload(self):
+        """webpush() must receive a Vapid OBJECT, never a PEM string: its
+        from_string() mangles PEM headers and fails on every send."""
+        obj, _ = push_mod._get_vapid()
+        self.assertIsInstance(obj, push_mod.Vapid)
+        push_mod._vapid = None
+        obj2, _ = push_mod._get_vapid()
+        self.assertIsInstance(obj2, push_mod.Vapid)
+
+    def test_vapid_private_file_is_0600(self):
+        push_mod.public_key()
+        self.assertEqual(push_mod.VAPID_FILE.stat().st_mode & 0o777, 0o600)
+
     def test_subscribe_validates(self):
         with self.assertRaises(ValueError):
-            push_mod.subscribe("http://insecure/x", SUB["keys"])  # not https
+            push_mod.subscribe("http://insecure/x", KEYS)  # not https
         with self.assertRaises(ValueError):
-            push_mod.subscribe(SUB["endpoint"], {"p256dh": "k"})  # no auth
+            push_mod.subscribe(SUB["endpoint"], {"p256dh": P256DH})  # no auth
+        with self.assertRaises(ValueError):
+            push_mod.subscribe(SUB["endpoint"], "not-a-dict")  # keys not an object
+        with self.assertRaises(ValueError):
+            push_mod.subscribe(SUB["endpoint"], {"p256dh": "k", "auth": AUTH})  # not a point
+        with self.assertRaises(ValueError):
+            push_mod.subscribe(SUB["endpoint"], {"p256dh": P256DH, "auth": "c2hvcnQ"})  # bad auth
         self.assertEqual(push_mod.subscription_count(), 0)
 
     def test_subscribe_idempotent_per_endpoint(self):
@@ -60,6 +89,10 @@ class PushTest(unittest.TestCase):
         self.assertEqual(push_mod.subscribe(**SUB2), 2)
         self.assertEqual(push_mod.unsubscribe(SUB["endpoint"]), 1)
         self.assertEqual(push_mod.unsubscribe("https://push.example.com/gone"), 1)
+
+    def test_subs_file_is_0600(self):
+        push_mod.subscribe(**SUB)
+        self.assertEqual(push_mod.SUBS_FILE.stat().st_mode & 0o777, 0o600)
 
     async def _push(self, sends, session=None):
         def fake_send(sub, payload):
@@ -89,6 +122,20 @@ class PushTest(unittest.TestCase):
         sends: list = []
         self.assertEqual(await self._push(sends), 0)
         self.assertEqual(sends, [])
+
+    async def test_send_one_passes_vapid_instance(self):
+        """Pin the pywebpush contract: vapid_private_key is the Vapid object."""
+        seen: dict = {}
+
+        def fake_webpush(**kw):
+            seen.update(kw)
+
+        flat = {"endpoint": "https://push.example.com/a", "p256dh": P256DH, "auth": AUTH}
+        with mock.patch.object(push_mod, "webpush", fake_webpush):
+            ok = await asyncio.to_thread(push_mod._send_one, flat, "{}")
+        self.assertTrue(ok)
+        self.assertIsInstance(seen["vapid_private_key"], push_mod.Vapid)
+        self.assertIn("sub", seen["vapid_claims"])
 
 
 class BridgePushTriggerTest(unittest.IsolatedAsyncioTestCase):
@@ -142,12 +189,26 @@ class BridgePushTriggerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.pushed), 1)
         self.assertEqual(self.pushed[0]["dialog"]["id"], "r2")
 
-    async def test_answer_clears_dedupe_for_new_requests(self):
+    async def test_answer_ui_clears_dedupe(self):
         await self.dispatch_ui("r1")
-        self.sess.pending_ui.pop("r1", None)
-        self.sess._pushed_dialogs.discard("r1")
-        await self.dispatch_ui("r1")  # omp re-asks the same id: push again
-        self.assertEqual(len(self.pushed), 2)
+        with mock.patch.object(self.sess, "send_raw", mock.AsyncMock(return_value=None)):
+            # a real answer (validated, then popped) clears the dedupe entry
+            await self.sess.answer_ui("r1", {"value": "Approve"})
+        self.assertNotIn("r1", self.sess._pushed_dialogs)
+        self.assertNotIn("r1", self.sess.pending_ui)
+
+    async def test_bad_answer_keeps_dialog_and_dedupe(self):
+        await self.dispatch_ui("r1")
+        with self.assertRaises(ValueError):
+            await self.sess.answer_ui("r1", {"value": "Maybe"})
+        self.assertIn("r1", self.sess.pending_ui)  # dialog still answerable
+        self.assertIn("r1", self.sess._pushed_dialogs)
+
+    async def test_turn_end_resolves_clear_dedupe(self):
+        await self.dispatch_ui("r1")
+        await self.sess._dispatch({"type": "agent_end", "messages": []})
+        self.assertEqual(self.sess.pending_ui, {})
+        self.assertEqual(self.sess._pushed_dialogs, set())
 
     async def test_push_disabled_is_quiet(self):
         with mock.patch.object(push_mod, "available", lambda: False):

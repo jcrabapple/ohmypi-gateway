@@ -26,34 +26,40 @@
     if (ok) await auth.logout();
   }
 
-  // --- push notifications -------------------------------------------------
-  let push = $state<{ state: 'checking' | 'on' | 'off' | 'unsupported' | 'blocked'; reason?: string; error?: string }>({
-    state: 'checking',
-  });
+// --- push notifications -------------------------------------------------
+let push = $state<{
+  state: 'checking' | 'on' | 'off' | 'unsupported' | 'blocked';
+  reason?: string;
+  error?: string;
+  busy?: boolean;
+}>({ state: 'checking' });
 
-  async function refreshPush(): Promise<void> {
-    try {
-      push = await pushStatus();
-    } catch {
-      push = { state: 'unsupported', reason: 'Push status is unavailable.' };
-    }
+async function refreshPush(): Promise<void> {
+  try {
+    push = await pushStatus();
+  } catch {
+    push = { state: 'unsupported', reason: 'Push status is unavailable.' };
   }
-  onMount(refreshPush);
+}
+onMount(refreshPush);
 
-  async function turnOn(): Promise<void> {
-    push = { state: push.state, error: undefined };
-    try {
-      await enablePush();
-      await refreshPush();
-    } catch (e) {
-      push = { state: 'off', error: e instanceof Error ? e.message : 'Could not subscribe.' };
-    }
-  }
-
-  async function turnOff(): Promise<void> {
-    await disablePush();
+async function turnOn(): Promise<void> {
+  if (push.busy) return;
+  push = { state: push.state, reason: push.reason, busy: true };
+  try {
+    await enablePush();
     await refreshPush();
+  } catch (e) {
+    push = { state: 'off', error: e instanceof Error ? e.message : 'Could not subscribe.' };
   }
+}
+
+async function turnOff(): Promise<void> {
+  if (push.busy) return;
+  push = { ...push, busy: true };
+  await disablePush();
+  await refreshPush();
+}
 
   const rows = $derived.by(() => {
     const s = system.data;
@@ -100,11 +106,11 @@
     <p class="push-note">Notifications are blocked for this site. Allow them in the browser's site settings.</p>
   {:else if push.state === 'on'}
     <p class="push-note">This device is subscribed.</p>
-    <button type="button" class="btn" onclick={turnOff}>Turn off</button>
+    <button type="button" class="btn" disabled={push.busy} onclick={turnOff}>{push.busy ? 'Working...' : 'Turn off'}</button>
   {:else}
     <p class="push-note">Off.</p>
     {#if push.error}<p class="push-note push-error" role="alert">{push.error}</p>{/if}
-    <button type="button" class="btn" onclick={turnOn}>Turn on</button>
+    <button type="button" class="btn" disabled={push.busy} onclick={turnOn}>{push.busy ? 'Working...' : 'Turn on'}</button>
   {/if}
 </Section>
 

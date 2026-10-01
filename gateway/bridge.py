@@ -166,6 +166,8 @@ class OmpSession:
         self.pending_ui: dict[str, dict] = {}
         # Dialog ids already web-pushed (one push per dialog, wherever it leaves pending_ui).
         self._pushed_dialogs: set[str] = set()
+        # Strong refs to in-flight push tasks (see _maybe_push_dialog).
+        self._push_tasks: set[asyncio.Task] = set()
 
         self.proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
@@ -507,8 +509,12 @@ class OmpSession:
         if not push_mod.available():
             return
         self._pushed_dialogs.add(str(obj.get("id")))
+        # Keep a strong reference: the loop holds only weak refs to tasks, and
+        # a push sitting in a worker thread can otherwise be GC'd mid-flight.
         task = asyncio.get_running_loop().create_task(
             push_mod.push_dialog(self.gw_id, self.omp_session_name, obj))
+        self._push_tasks.add(task)
+        task.add_done_callback(self._push_tasks.discard)
         task.add_done_callback(self._log_push_error)
 
     @staticmethod
@@ -519,18 +525,22 @@ class OmpSession:
     async def answer_ui(self, request_id: str, response: dict) -> dict:
         """Answer a pending dialog. Raises KeyError if it is not pending
         (already answered by another client, or never existed)."""
-        req = self.pending_ui.pop(request_id)
-        self._pushed_dialogs.discard(request_id)
+        req = self.pending_ui.get(request_id)
+        if req is None:
+            raise KeyError(request_id)
         frame = {"type": "extension_ui_response", "id": request_id}
         for k in ("value", "confirmed", "cancelled"):
             if k in response:
                 frame[k] = response[k]
+        opts = req.get("options")
         if len(frame) == 2:
             raise ValueError("response needs one of: value, confirmed, cancelled")
-        opts = req.get("options")
         if "value" in frame and req.get("method") == "select" and opts and frame["value"] not in opts:
-            self.pending_ui[request_id] = req
             raise ValueError(f"value must be one of {opts}")
+        # Validated: only now does the dialog leave pending_ui (and its push
+        # dedupe). The old pop-first shape lost the dialog on a bad answer.
+        self.pending_ui.pop(request_id)
+        self._pushed_dialogs.discard(str(request_id))
         await self.send_raw(frame)
         await self._publish({"type": "ui_resolved", "id": request_id, "method": req.get("method"),
                              "response": {k: v for k, v in frame.items() if k not in ("type", "id")}})
@@ -538,7 +548,7 @@ class OmpSession:
 
     async def _resolve_ui_locally(self, request_id: str, reason: str) -> None:
         if self.pending_ui.pop(request_id, None) is not None:
-            self._pushed_dialogs.discard(request_id)
+            self._pushed_dialogs.discard(str(request_id))
             await self._publish({"type": "ui_resolved", "id": request_id, "reason": reason})
 
     async def send_raw(self, frame: dict) -> None:

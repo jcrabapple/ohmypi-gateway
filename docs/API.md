@@ -117,12 +117,15 @@ provider and model are stored per turn.
 When a blocking dialog (tool approval, question) becomes pending on a session
 that NO WebSocket client is watching, the gateway pushes every registered
 device. One push per dialog. Pushes require the `pywebpush` package in the
-venv; without it the routes below answer 503 and the rest of the gateway is
-unaffected. VAPID keys are generated on first use and stored at
-`push-vapid.json` (mode 600) next to `auth-token`; device subscriptions at
-`push-subs.json`. Endpoints that answer 404/410 are pruned on the next send.
-The notification deep-links to `/#/s/{gwId}`. iOS only delivers web push to
-the installed PWA.
+venv: without it `GET /push/vapid` and `POST /push/subscribe` answer 503
+(`POST /push/unsubscribe` still works - it only edits the local store) and the
+rest of the gateway is unaffected. VAPID keys are generated on first use and
+stored at `push-vapid.json` (created 0600, atomically) next to `auth-token`;
+device subscriptions at `push-subs.json` (also 0600). `keys.p256dh` must be a
+65-byte uncompressed P-256 point and `keys.auth` a 16-32 byte secret, both
+base64url - malformed keys are 422, never stored. Endpoints that answer
+404/410 are pruned on the next send. The notification deep-links to
+`/#/s/{gwId}`. iOS only delivers web push to the installed PWA.
 
 | Method | Path | |
 |---|---|---|

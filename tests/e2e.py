@@ -680,20 +680,28 @@ check("stop-reaped", all(s["gwId"] != gid for s in ok("GET", "/api/sessions?incl
 
 # --- web push ------------------------------------------------------------
 
+import base64 as _b64
+_PUSH_P256DH = _b64.urlsafe_b64encode(bytes([4]) + bytes(range(64))).rstrip(b"=").decode()
+_PUSH_AUTH = _b64.urlsafe_b64encode(bytes(range(16))).rstrip(b"=").decode()
+_PUSH_KEYS = {"p256dh": _PUSH_P256DH, "auth": _PUSH_AUTH}
+
 code, data, _ = req("GET", "/api/push/vapid")
 check("push-vapid-key", code == 200 and isinstance(data.get("publicKey"), str) and len(data["publicKey"]) == 87,
       f"-> {code} len={len(data.get('publicKey') or '')}")
 
-code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "http://insecure/x", "keys": {"p256dh": "k", "auth": "a"}})
+code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "http://insecure/x", "keys": _PUSH_KEYS})
 check("push-subscribe-rejects-insecure", code == 422, f"-> {code}")
 
-code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": {"p256dh": "k"}})
+code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": {"p256dh": _PUSH_P256DH}})
 check("push-subscribe-rejects-missing-auth", code == 422, f"-> {code}")
 
-code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": {"p256dh": "k", "auth": "a"}})
+code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": {"p256dh": "k", "auth": _PUSH_AUTH}})
+check("push-subscribe-rejects-bad-key-shape", code == 422, f"-> {code}")
+
+code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": _PUSH_KEYS})
 check("push-subscribe-ok", code == 200 and data.get("ok") is True, f"-> {code} {data}")
 
-code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": {"p256dh": "k2", "auth": "a2"}})
+code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": _PUSH_KEYS})
 check("push-subscribe-idempotent", code == 200 and data.get("subscriptions") == 1, f"-> {code} {data}")
 
 code, data, _ = req("POST", "/api/push/unsubscribe", {"endpoint": "https://push.example.com/e2e"})

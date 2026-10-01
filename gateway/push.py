@@ -9,12 +9,16 @@ are pruned on the next send.
 Everything here is best-effort: a missing pywebpush install disables the
 feature cleanly (available() -> False), and push_dialog never raises.
 
-Storage lives next to auth-token: push-vapid.json (generated on first use,
-chmod 600) and push-subs.json (device subscription list, atomic writes).
+Storage lives next to auth-token: push-vapid.json (generated on first use) and
+push-subs.json (device subscription list). Both hold secrets (the VAPID private
+key, the devices' encryption keys), so both are written atomically with 0600
+from creation. All disk and network work runs in worker threads; callers on
+the event loop never block.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -22,6 +26,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger("ohmpi-gateway.push")
 
@@ -29,7 +34,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 VAPID_FILE = PROJECT_DIR / "push-vapid.json"
 SUBS_FILE = PROJECT_DIR / "push-subs.json"
 # The mailto in VAPID claims; push services require a contact URI.
-_VAPID_SUB = "mailto:jcrabapple@fastmail.us"
+_VAPID_SUB = os.environ.get("OMPGW_VAPID_SUB", "mailto:jcrabapple@fastmail.us")
 _SEND_TIMEOUT_S = 10
 
 webpush = None  # set by the import below; None means the feature is disabled
@@ -49,7 +54,7 @@ except Exception as e:  # pragma: no cover - depends on install
     _IMPORT_ERROR = str(e)
 
 _lock = threading.Lock()
-_vapid: tuple[str, str] | None = None  # (private_pem, public_b64url)
+_vapid: tuple[Any, str] | None = None  # (Vapid instance, public base64url)
 
 
 def available() -> bool:
@@ -64,15 +69,26 @@ def _b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
-def _get_vapid() -> tuple[str, str]:
-    """(private PEM, public base64url key), generated and persisted on first use."""
+def _write_private(path: Path, text: str) -> None:
+    """Atomic write of a secret file, 0600 from creation (no readable window)."""
+    tmp = path.with_suffix(".json.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+
+
+def _get_vapid() -> tuple[Any, str]:
+    """(Vapid instance, public base64url key), generated and persisted on first
+    use. pywebpush also accepts a PEM *string*, but its from_string() mangles
+    PEM headers - the Vapid OBJECT is the only safe form to hand it."""
     global _vapid
     with _lock:
         if _vapid is not None:
             return _vapid
         if VAPID_FILE.is_file():
             data = json.loads(VAPID_FILE.read_text())
-            _vapid = (data["privatePem"], data["publicKey"])
+            _vapid = (Vapid.from_pem(data["privatePem"].encode()), data["publicKey"])
             return _vapid
         key = Vapid()
         key.generate_keys()
@@ -81,10 +97,9 @@ def _get_vapid() -> tuple[str, str]:
             serialization.NoEncryption()).decode()
         pub = _b64url(key.public_key.public_bytes(
             serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint))
-        VAPID_FILE.write_text(json.dumps({"privatePem": pem, "publicKey": pub}))
-        os.chmod(VAPID_FILE, 0o600)
-        _vapid = (pem, pub)
+        _write_private(VAPID_FILE, json.dumps({"privatePem": pem, "publicKey": pub}))
         log.info("generated VAPID keys at %s", VAPID_FILE)
+        _vapid = (key, pub)
         return _vapid
 
 
@@ -106,18 +121,38 @@ def _load_subs() -> list[dict]:
 
 
 def _save_subs(subs: list[dict]) -> None:
-    tmp = SUBS_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(subs, indent=1))
-    os.replace(tmp, SUBS_FILE)
+    _write_private(SUBS_FILE, json.dumps(subs, indent=1))
 
 
-def subscribe(endpoint: str, keys: dict) -> int:
+def _validate_keys(keys: Any) -> tuple[str, str]:
+    """(p256dh, auth), base64url-decoded and shape-checked, so a malformed
+    registration can never become a subscription that fails (and therefore
+    never prunes) on every send."""
+    if not isinstance(keys, dict):
+        raise ValueError("keys must be an object with p256dh and auth")
+    p256dh, auth = keys.get("p256dh"), keys.get("auth")
+    if not isinstance(p256dh, str) or not p256dh or not isinstance(auth, str) or not auth:
+        raise ValueError("keys.p256dh and keys.auth are required strings")
+
+    def decode(value: str) -> bytes:
+        try:
+            return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        except Exception as e:
+            raise ValueError("keys must be base64url strings") from e
+
+    point, secret = decode(p256dh), decode(auth)
+    if len(point) != 65 or point[0] != 0x04:
+        raise ValueError("keys.p256dh must be a 65-byte uncompressed P-256 point")
+    if not 16 <= len(secret) <= 32:
+        raise ValueError("keys.auth must be a 16-byte authentication secret")
+    return p256dh, auth
+
+
+def subscribe(endpoint: Any, keys: Any) -> int:
     """Add (or refresh) one device subscription. Returns the list size."""
     if not isinstance(endpoint, str) or not endpoint.startswith("https://"):
         raise ValueError("endpoint must be an https push service URL")
-    p256dh, auth = keys.get("p256dh"), keys.get("auth")
-    if not isinstance(p256dh, str) or not p256dh or not isinstance(auth, str) or not auth:
-        raise ValueError("keys.p256dh and keys.auth are required")
+    p256dh, auth = _validate_keys(keys)
     with _lock:
         subs = [s for s in _load_subs() if s.get("endpoint") != endpoint]
         subs.append({"endpoint": endpoint, "p256dh": p256dh, "auth": auth,
@@ -126,7 +161,9 @@ def subscribe(endpoint: str, keys: dict) -> int:
         return len(subs)
 
 
-def unsubscribe(endpoint: str) -> int:
+def unsubscribe(endpoint: Any) -> int:
+    if not isinstance(endpoint, str) or not endpoint:
+        raise ValueError("endpoint required")
     with _lock:
         subs = [s for s in _load_subs() if s.get("endpoint") != endpoint]
         _save_subs(subs)
@@ -160,8 +197,9 @@ def _send_one(sub: dict, payload: str) -> bool:
 
 async def push_dialog(gw_id: str, session_name: str | None, dialog: dict) -> int:
     """Notify every subscribed device about a pending dialog. Returns the
-    number of devices reached. Never raises."""
-    subs = _load_subs()
+    number of devices reached. Never raises. All disk and network work runs in
+    worker threads (this is scheduled from the session dispatch path)."""
+    subs = await asyncio.to_thread(_load_subs)
     if not subs:
         return 0
     method = dialog.get("method") or "dialog"
@@ -174,25 +212,26 @@ async def push_dialog(gw_id: str, session_name: str | None, dialog: dict) -> int
         "tag": f"omp-dialog-{gw_id}-{dialog.get('id')}",
         "url": f"/#/s/{gw_id}",
     })
-    delivered, gone = 0, []
-    for sub in subs:
+
+    async def one(sub: dict) -> tuple[str, bool | None]:
+        # True delivered, False gone (prune), None transient failure.
         try:
-            if await _send_one_async(sub, payload):
-                delivered += 1
-            else:
-                gone.append(sub["endpoint"])
+            return sub["endpoint"], await asyncio.to_thread(_send_one, sub, payload)
         except Exception as e:
             log.warning("[%s] push to %s... failed: %s", gw_id, sub["endpoint"][:48], e)
+            return sub["endpoint"], None
+
+    # Fan out: one hanging push service must not delay the other devices.
+    results = await asyncio.gather(*(one(s) for s in subs))
+    delivered = sum(1 for _, ok in results if ok is True)
+    gone = [ep for ep, ok in results if ok is False]
     if gone:
-        with _lock:
-            keep = [s for s in _load_subs() if s.get("endpoint") not in set(gone)]
-            _save_subs(keep)
+        def prune() -> None:
+            with _lock:
+                keep = [s for s in _load_subs() if s.get("endpoint") not in set(gone)]
+                _save_subs(keep)
+        await asyncio.to_thread(prune)
         log.info("[%s] pruned %d dead push subscription(s)", gw_id, len(gone))
     if delivered:
         log.info("[%s] pushed dialog to %d device(s)", gw_id, delivered)
     return delivered
-
-
-async def _send_one_async(sub: dict, payload: str) -> bool:
-    import asyncio
-    return await asyncio.to_thread(_send_one, sub, payload)

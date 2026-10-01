@@ -99,3 +99,30 @@ self.addEventListener('notificationclick', (event) => {
     })(),
   );
 });
+
+// Browsers rotate subscription endpoints over time; re-register without the
+// user visiting settings. Best effort: needs the same-origin session cookie,
+// and a failure just means the next manual enable fixes it.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      const res = await fetch('/api/push/vapid', { credentials: 'include' });
+      if (!res.ok) return;
+      const { publicKey } = await res.json();
+      const pad = '='.repeat((4 - (publicKey.length % 4)) % 4);
+      const raw = atob((publicKey + pad).replace(/-/g, '+').replace(/_/g, '/'));
+      const key = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) key[i] = raw.charCodeAt(i);
+      const sub = await self.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: key,
+      });
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub.toJSON()),
+      });
+    })().catch(() => {}),
+  );
+});

@@ -66,17 +66,26 @@ export async function pushStatus(): Promise<
   const sw = await registration();
   const cap = pushCapability(sw);
   if (!cap.supported) return { state: 'unsupported', reason: cap.reason };
+  // The gateway has to be able to send, not just the device to receive: a
+  // local subscription means nothing on a gateway without pywebpush.
+  try {
+    await vapidKey();
+  } catch {
+    return { state: 'unsupported', reason: 'Web push is not enabled on the gateway.' };
+  }
   const sub = await sw!.pushManager.getSubscription();
   return sub ? { state: 'on' } : { state: 'off' };
 }
 
 /**
- * Ask permission (call from a click handler), subscribe with the gateway's
- * VAPID key, and register the subscription. Throws with a user-readable
+ * Subscribe this device. Fetches the gateway key FIRST: permission is only
+ * prompted once the gateway can actually complete the setup, so a 503 never
+ * burns the one OS-level permission prompt. Throws with a user-readable
  * message on failure; the caller surfaces it.
  */
 export async function enablePush(): Promise<void> {
   if (typeof Notification === 'undefined') throw new Error('This browser has no notification support.');
+  const key = await vapidKey();
   const permission = Notification.permission === 'default'
     ? await Notification.requestPermission()
     : Notification.permission;
@@ -84,16 +93,19 @@ export async function enablePush(): Promise<void> {
   const sw = await registration();
   const cap = pushCapability(sw);
   if (!cap.supported) throw new Error(cap.reason);
-  const key = await vapidKey();
   const sub = await sw!.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(key),
   });
   const json = sub.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
-  await sendToGateway('/api/push/subscribe', {
-    endpoint: json.endpoint,
-    keys: json.keys,
-  });
+  try {
+    await sendToGateway('/api/push/subscribe', { endpoint: json.endpoint, keys: json.keys });
+  } catch (e) {
+    // Roll back: a local subscription the gateway never registered is a silent
+    // lie - pushStatus would report "on" while no push can ever arrive.
+    await sub.unsubscribe().catch(() => {});
+    throw e;
+  }
 }
 
 /** Unsubscribe this device locally and on the gateway. Best effort. */
