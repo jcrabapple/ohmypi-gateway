@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 auth-token
 gateway.env
+push-vapid.json
+push-subs.json
 
 # local dev artifacts (raw captures contain local paths)
 dev/
