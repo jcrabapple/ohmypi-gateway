@@ -547,7 +547,6 @@ class OmpSession:
         finally:
             self.pending.pop(rid, None)
         if late_errors:
-            self.pending.pop(f"late:{rid}", None)
             try:
                 await asyncio.wait_for(late_fut, 0.25)
             except asyncio.TimeoutError:
@@ -556,6 +555,11 @@ class OmpSession:
                 # The ack already went out, so the caller can't get an error
                 # from here; log it so late failures aren't invisible.
                 log.warning("[%s] late error for %s: %s", self.gw_id, type_, e)
+            finally:
+                # Keep the late: key in self.pending for the WHOLE wait window:
+                # _dispatch correlates the late error through it, so popping
+                # early (the old shape) made every late response a drop.
+                self.pending.pop(f"late:{rid}", None)
         if not resp.get("success"):
             raise RpcError(resp.get("command", type_), resp.get("error", "unknown"), resp.get("code"))
         return resp.get("data")
@@ -670,11 +674,16 @@ class OmpSession:
         self.exited = True
         if self.proc is not None:
             self.exit_code = self.proc.returncode
-        # A dead child can still have a finished-but-unflushed turn (exit inside
-        # the prompt_result grace window): write the row instead of dropping it.
-        # acc None means no message ever arrived; a zero-token row is junk.
+        # A dead child can still have a finished-but-unflushed turn: write the
+        # row instead of dropping it. If agent_end never ran (crash mid-turn)
+        # the partial accumulator is real usage but the turn did not complete,
+        # so it is recorded as a failure, never a silent ok.
         if not self._turn_flushed and self._turn_acc is not None:
+            if self._turn_flush_timer is None:  # agent_end never ran
+                self._turn_failed = True
             self._ledger_flush_soon()
+        else:
+            self._cancel_flush_timer()
         for fut in list(self.pending.values()):
             if not fut.done():
                 fut.set_exception(ProcessDead(f"omp exited (code {self.exit_code})"))

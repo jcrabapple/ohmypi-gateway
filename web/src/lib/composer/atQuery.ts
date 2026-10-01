@@ -21,8 +21,9 @@ export function extractAtQuery(beforeCaret: string): AtQuery | null {
   if (q !== -1) {
     const prev = beforeCaret.charAt(q - 1); // '' when the @" sits at index 0
     // Path characters count as a boundary too: `@src/@"` right after an
-    // inserted mention must open, not just start-of-line/whitespace.
-    const opened = prev === '' || /[\s/_.-]/.test(prev);
+    // inserted mention must open, not just start-of-line/whitespace. Only `/`,
+    // though: `.` and `-` would fire mid-token (user.name@", kebab-case@").
+    const opened = prev === '' || /[\s/]/.test(prev);
     const rest = beforeCaret.slice(q + 2);
     // A quote on a later line is somebody else's text, so a quoted query
     // never spans a newline: an unclosed @" on its own line is just text.

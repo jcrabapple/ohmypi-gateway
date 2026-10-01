@@ -50,7 +50,10 @@
     following = distanceFromBottom() <= FOLLOW_PX;
   }
 
-  // A user gesture takes over immediately, even mid-animation.
+  // A user gesture takes over immediately, even mid-animation: wheel, touch,
+  // scrollbar drag (pointerdown) and keyboard scrolling all count. Without the
+  // keyboard/pointer cases the programmatic flag can wedge and follow-mode
+  // stops listening to the user entirely.
   function userScroll() {
     programmatic = 0;
     onscroll();
@@ -125,7 +128,7 @@
     </div>
   {:else}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="scroller scroll-y" bind:this={scroller} {onscroll} onwheel={userScroll} ontouchstart={userScroll}>
+    <div class="scroller scroll-y" bind:this={scroller} {onscroll} onwheel={userScroll} ontouchstart={userScroll} onpointerdown={userScroll} onkeydown={userScroll}>
       <div class="inner" bind:this={inner}>
         {#if lead}
           <div class="lead">{@render lead()}</div>

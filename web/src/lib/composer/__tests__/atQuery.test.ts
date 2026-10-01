@@ -34,6 +34,8 @@ describe('extractAtQuery', () => {
     expect(extractAtQuery('fix @src/lib/@"hand')).toEqual({ start: 13, query: 'hand', quoted: true });
     // other punctuation is still a mid-word @
     expect(extractAtQuery('a)@"b')).toBeNull();
+    expect(extractAtQuery('user.name@"a')).toBeNull();
+    expect(extractAtQuery('kebab-case@"b')).toBeNull();
   });
 
   it('ignores a trigger that already ended before the caret', () => {

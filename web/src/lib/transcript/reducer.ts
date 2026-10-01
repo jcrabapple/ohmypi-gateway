@@ -642,13 +642,13 @@ function onEvent(state: TranscriptState, event: OmpEvent | UnknownEvent, at: num
         d.items[i] = item;
         return d;
       }
-      for (let j = d.items.length - 1; j >= 0; j--) {
-        const it = d.items[j]!;
-        if (it.kind === 'user') break; // a newer prompt: this output starts a fresh card
-        if (it.kind === 'command') {
-          d.items[j] = { ...it, text: it.text + text };
-          return d;
-        }
+      // Continuation chunks only extend a card that is still the LAST item:
+      // scanning past assistant/tool/notice items would append to a card from
+      // an older turn and corrupt the transcript.
+      const last = d.items.at(-1);
+      if (last?.kind === 'command') {
+        d.items[d.items.length - 1] = { ...last, text: (last as CommandItem).text + text };
+        return d;
       }
       d.items.push({ kind: 'command', id: nextId(d, 'c'), command: undefined, text, raw: ev });
       return d;
