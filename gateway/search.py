@@ -37,6 +37,11 @@ SCHEMA_VERSION = 1
 REFRESH_MIN_INTERVAL_S = 30
 _TOKEN = re.compile(r"[\w][\w./+-]*")
 _TITLE_CAP = 90
+# Out-of-band snippet delimiters (Unicode private use area): a transcript that
+# literally contains <mark> must never turn into live markup on the client.
+# The client maps these to <mark>/</mark> AFTER HTML-escaping the snippet.
+_MARK_OPEN = ""
+_MARK_CLOSE = ""
 
 # RLock: ensure_fresh holds it while calling refresh(), which locks too.
 _lock = threading.RLock()
@@ -120,7 +125,7 @@ def _parse_file(path: Path) -> tuple[list[dict], dict]:
                 if role not in ("user", "assistant"):
                     continue
                 text = " ".join(
-                    block.get("text", "") for block in msg.get("content") or []
+                    block.get("text") or "" for block in msg.get("content") or []
                     if isinstance(block, dict) and block.get("type") == "text"
                 ).strip()
                 if not text:
@@ -166,6 +171,10 @@ def refresh(root: Path | None = None) -> dict:
                 if known.get(path) == (mtime, size):
                     continue
                 rows, meta = _parse_file(Path(path))
+                if not meta:
+                    # unreadable file (permissions, vanished mid-scan): skip it
+                    # this round rather than inserting a half-empty row
+                    continue
                 meta["mtime"], meta["size"] = mtime, size
                 con.execute("DELETE FROM messages WHERE path = ?", (path,))
                 con.execute("DELETE FROM files WHERE path = ?", (path,))
@@ -247,27 +256,28 @@ def query(q: str, limit: int = 40, role: str | None = None) -> dict:
         total = con.execute(f"SELECT count(*) c FROM messages {where}", args).fetchone()["c"]
         rows = con.execute(
             f"""
-            SELECT path, line, role, ts,
-                   snippet(messages, 0, '<mark>', '</mark>', '…', 24) AS snippet
-            FROM messages {where}
-            ORDER BY rank
+            SELECT m.path, m.line, m.role, m.ts,
+                   snippet(messages, 0, '{_MARK_OPEN}', '{_MARK_CLOSE}', '…', 24) AS snippet,
+                   f.session_id AS session_id, f.cwd, f.title
+            FROM messages m
+            LEFT JOIN files f ON f.path = m.path
+            {where}
+            ORDER BY rank, ts DESC
             LIMIT {limit}
             """,
             args,
         ).fetchall()
-        meta = {r["path"]: dict(r) for r in con.execute("SELECT * FROM files")}
         results = []
         for r in rows:
-            f = meta.get(r["path"], {})
             results.append({
                 "path": r["path"],
                 "line": r["line"],
                 "role": r["role"],
                 "ts": r["ts"],
                 "snippet": r["snippet"],
-                "sessionId": f.get("session_id"),
-                "cwd": f.get("cwd"),
-                "title": f.get("title"),
+                "sessionId": r["session_id"],
+                "cwd": r["cwd"],
+                "title": r["title"],
             })
         return {"total": total, "results": results}
     finally:

@@ -107,9 +107,10 @@ class SearchTest(unittest.TestCase):
         both = search_mod.query("widget")
         self.assertEqual(both["total"], 2)
         # FTS rank decides order (the shorter assistant doc ranks higher);
-        # both roles are present and matches are marked.
+        # both roles are present and matches carry the sentinel delimiters.
         self.assertEqual({r["role"] for r in both["results"]}, {"user", "assistant"})
-        self.assertTrue(all("<mark>widget</mark>" in r["snippet"] for r in both["results"]))
+        sentinel = f"{search_mod._MARK_OPEN}widget{search_mod._MARK_CLOSE}"
+        self.assertTrue(all(sentinel in r["snippet"] for r in both["results"]))
 
     def test_limit_is_capped(self):
         session_file(self.root / "e.jsonl", "sid-5", "/w", [("user", "needle here")])
@@ -140,6 +141,55 @@ class SearchTest(unittest.TestCase):
         con.close()
         with self.assertRaisesRegex(RuntimeError, "newer than this gateway"):
             search_mod.refresh()
+
+    # ------------------------------------------------ gate round 1 findings
+
+    def test_unreadable_file_is_skipped_not_fatal(self):
+        """An unreadable transcript used to crash refresh() with a SQLite
+        binding error and 500 every later search."""
+        good = self.root / "ok.jsonl"
+        session_file(good, "sid-ok", "/w", [("user", "readable words")])
+        bad = self.root / "bad.jsonl"
+        bad.write_text("whatever")
+        bad.chmod(0o000)
+        try:
+            out = search_mod.refresh()
+        finally:
+            bad.chmod(0o644)
+        self.assertEqual(out["added"], 1)  # the readable one
+        r = search_mod.query("readable")
+        self.assertEqual(r["total"], 1)
+
+    def test_null_text_block_does_not_crash(self):
+        (self.root / "n.jsonl").write_text("\n".join([
+            json.dumps({"type": "session", "id": "sid-n", "cwd": "/w"}),
+            json.dumps({"type": "message", "message": {"role": "assistant",
+                       "content": [{"type": "text", "text": None}, {"type": "text", "text": "real text"}]}}),
+        ]) + "\n")
+        search_mod.refresh()
+        self.assertEqual(search_mod.query("real text")["total"], 1)
+
+    def test_literal_mark_in_transcript_stays_text(self):
+        """The gateway delimits matches with private-use-area sentinels. A
+        transcript containing literal <mark> has its 'mark' token matched (it
+        IS a match), but the angle brackets travel as plain characters, so the
+        client's escape-then-sentinel-map renders them as text, not markup."""
+        session_file(self.root / "m.jsonl", "sid-m", "/w",
+                     [("assistant", "we wrap hits in <mark> tags")])
+        search_mod.refresh()
+        r = search_mod.query("mark")
+        self.assertEqual(r["total"], 1)
+        snippet = r["results"][0]["snippet"]
+        # exact shape: literal < and > stay literal; only the token is wrapped
+        self.assertEqual(snippet, "we wrap hits in <\ue000mark\ue001> tags")
+        self.assertNotIn("<mark>", snippet)
+        self.assertNotIn("</mark>", snippet)
+
+    def test_unicode_query_matches(self):
+        session_file(self.root / "u.jsonl", "sid-u", "/w", [("user", "café résumé notes")])
+        search_mod.refresh()
+        self.assertEqual(search_mod.query("café")["total"], 1)
+
 
 
 if __name__ == "__main__":

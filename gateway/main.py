@@ -461,11 +461,12 @@ async def push_unsubscribe(request: Request):
 
 
 @app.get("/api/search")
-async def search_endpoint(q: str = Query(min_length=1), limit: int = 40,
+async def search_endpoint(q: str = Query(min_length=1), limit: int = Query(default=40, ge=1, le=200),
                           role: str | None = None, refresh: int = 0):
     """Full-text search over saved session transcripts (user/assistant text).
     Index refreshes incrementally, at most once per 30s (refresh=1 forces).
-    Results carry <mark> highlights the client must escape before rendering."""
+    Results carry private-use-area delimiters around matches; clients must
+    escape the snippet before mapping them to <mark> elements."""
     from . import search as smod
     if role not in (None, "user", "assistant"):
         raise HTTPException(422, "role must be user|assistant")
@@ -475,9 +476,11 @@ async def search_endpoint(q: str = Query(min_length=1), limit: int = 40,
         return smod.query(q, limit=limit, role=role)
 
     out = await asyncio.to_thread(run)
+    await get_manager().reap_dead()
     live_by_file: dict[str, str] = {}
     for sess in get_manager().sessions.values():
-        if sess.omp_session_file:
+        # exited children are still registered until reaped: they are not live
+        if not sess.exited and sess.omp_session_file:
             # omp emits resolved paths (/var/home on Aurora); compare resolved.
             live_by_file[str(Path(sess.omp_session_file).resolve())] = sess.gw_id
     for r in out["results"]:
@@ -636,7 +639,10 @@ async def create_session(request: Request):
     resume = body.get("resumeFrom")
     if resume:
         rp = Path(resume).expanduser().resolve()
-        if not rp.is_file() or (OMP_AGENT_DIR / "sessions") not in rp.parents:
+        # Same root the search index scans (OMPGW_SESSIONS_DIR override keeps
+        # search results and resume validation in agreement).
+        from .search import SESSIONS_DIR as _SEARCH_ROOT
+        if not rp.is_file() or _SEARCH_ROOT.resolve() not in rp.parents:
             raise HTTPException(422, "resumeFrom must be a saved session file from /api/sessions")
         resume = str(rp)
         existing = get_manager().find_by_file(resume)

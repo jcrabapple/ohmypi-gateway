@@ -141,7 +141,7 @@
       <Icon name="sliders" />
     </button>
     <button type="button" class="icon-btn" aria-label="Search transcripts" title="Search transcripts" aria-pressed={nav.search} onclick={() => nav.openSearch()}>
-      <Icon name="search" />
+      <Icon name="file" />
     </button>
     <button
       type="button"

@@ -36,31 +36,40 @@
     timer = setTimeout(() => void run(query), 250);
     return () => {
       if (timer) clearTimeout(timer);
+      if (ctrl) ctrl.abort();
     };
   });
 
   async function run(query: string): Promise<void> {
     if (ctrl) ctrl.abort();
-    ctrl = new AbortController();
+    // Local reference: the component-level ctrl is replaced by the next run,
+    // so this request's catch/finally must inspect its OWN controller.
+    const cur = new AbortController();
+    ctrl = cur;
     try {
-      const out = await host.search(query, { role, signal: ctrl.signal });
-      if (ctrl.signal.aborted) return;
+      const out = await host.search(query, { role, signal: cur.signal });
+      if (cur.signal.aborted) return;
       hits = out.results;
       total = out.total;
       indexed = out.indexed;
       lastQuery = query;
       error = null;
     } catch (e) {
-      if (!ctrl.signal.aborted) error = e instanceof Error ? e.message : 'Search failed';
+      if (cur.signal.aborted) return;
+      error = e instanceof Error ? e.message : 'Search failed';
     } finally {
-      if (!ctrl.signal.aborted) loading = false;
+      if (ctrl === cur) loading = false;
     }
   }
 
   function setRole(next: Role): void {
     if (role === next) return;
     role = next;
-    lastQuery = ''; // force a re-run with the new filter
+    // Role chips are deliberate clicks: re-run immediately instead of
+    // waiting out the keystroke debounce.
+    const query = q.trim();
+    if (query) void run(query);
+    else lastQuery = '';
   }
 
   /** Live sessions open directly; saved ones resume from their file. */
@@ -78,13 +87,17 @@
     return Number.isNaN(t) ? '' : new Date(t).toLocaleString();
   }
 
-  /** Snippet arrives with <mark> tags from the gateway: escape the text,
-      then turn the markers back into real highlight elements. */
+  /** The gateway wraps matches in private-use-area sentinels (U+E000/U+E001)
+      that cannot collide with transcript text. Escape the snippet as pure
+      text first, THEN map the sentinels to real <mark> elements: a transcript
+      that literally says <mark> renders as text, never as markup. */
   function snippetHtml(snippet: string): string {
-    const escaped = snippet
-      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-      .replaceAll('&lt;mark&gt;', '<mark>').replaceAll('&lt;/mark&gt;', '</mark>');
-    return escaped;
+    return snippet
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('', '<mark>')
+      .replaceAll('', '</mark>');
   }
 
   const groups = $derived.by(() => {
@@ -137,6 +150,7 @@
     {#if total > hits.length}
       <p class="state">Top {hits.length} of {total} matches.</p>
     {/if}
+    <div class="results" class:stale={loading}>
     {#each groups as group (group.path)}
       <section class="session" aria-label={label(group.list[0])}>
         <button
@@ -159,6 +173,7 @@
         {/each}
       </section>
     {/each}
+    </div>
   {/if}
 </div>
 
@@ -213,6 +228,14 @@
   }
   .state {
     color: var(--ink-3);
+  }
+  .results {
+    display: grid;
+    gap: var(--s-3);
+    transition: opacity var(--dur-fast) var(--ease);
+  }
+  .results.stale {
+    opacity: 0.55;
   }
   .state.error {
     color: var(--ansi-1, #f87171);
