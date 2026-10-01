@@ -698,14 +698,19 @@ check("push-subscribe-rejects-missing-auth", code == 422, f"-> {code}")
 code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": {"p256dh": "k", "auth": _PUSH_AUTH}})
 check("push-subscribe-rejects-bad-key-shape", code == 422, f"-> {code}")
 
-code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": _PUSH_KEYS})
-check("push-subscribe-ok", code == 200 and data.get("ok") is True, f"-> {code} {data}")
+# The store may legitimately hold real devices: assert dedupe RELATIVE to the
+# starting count, never absolute numbers.
+code, before, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": _PUSH_KEYS})
+check("push-subscribe-ok", code == 200 and before.get("ok") is True, f"-> {code} {before}")
 
 code, data, _ = req("POST", "/api/push/subscribe", {"endpoint": "https://push.example.com/e2e", "keys": _PUSH_KEYS})
-check("push-subscribe-idempotent", code == 200 and data.get("subscriptions") == 1, f"-> {code} {data}")
+check("push-subscribe-idempotent",
+      code == 200 and data.get("subscriptions") == before.get("subscriptions"),
+      f"-> {code} {data.get('subscriptions')} (before {before.get('subscriptions')})")
 
 code, data, _ = req("POST", "/api/push/unsubscribe", {"endpoint": "https://push.example.com/e2e"})
-check("push-unsubscribe-ok", code == 200 and data.get("subscriptions") == 0, f"-> {code} {data}")
+check("push-unsubscribe-ok", code == 200 and data.get("subscriptions") == before.get("subscriptions", 1) - 1,
+      f"-> {code} {data.get('subscriptions')} (before {before.get('subscriptions')})")
 
 code, data, _ = req("POST", "/api/push/unsubscribe", {})
 check("push-unsubscribe-requires-endpoint", code == 422, f"-> {code}")
