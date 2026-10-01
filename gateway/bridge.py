@@ -182,6 +182,7 @@ class OmpSession:
         self.queue: list[dict] = []
         self._queue_task: asyncio.Task | None = None
         self._queue_seq = 0
+        self._queue_retry_timer: asyncio.TimerHandle | None = None
         # Base delay for queue re-fire retries (tests shrink it).
         self.QUEUE_RETRY_BASE_S = 2.0
         # True from prompt-ack until prompt_result: closes the window between
@@ -590,6 +591,11 @@ class OmpSession:
             return True
         return False
 
+    def _cancel_queue_retry_timer(self) -> None:
+        if self._queue_retry_timer is not None:
+            self._queue_retry_timer.cancel()
+            self._queue_retry_timer = None
+
     def _maybe_fire_queue(self) -> None:
         """Fire the queue head after a successful turn (called at prompt_result
         ok and after queue_add while idle). Never awaits inline: the reader
@@ -621,7 +627,9 @@ class OmpSession:
             entry["retries"] = entry.get("retries", 0) + 1
             if entry["retries"] <= 5:
                 delay = self.QUEUE_RETRY_BASE_S * entry["retries"]
-                asyncio.get_running_loop().call_later(delay, self._maybe_fire_queue)
+                self._cancel_queue_retry_timer()
+                self._queue_retry_timer = asyncio.get_running_loop().call_later(
+                    delay, self._maybe_fire_queue)
                 log.warning("[%s] queue head refused (%s); retry %d in %.1fs",
                             self.gw_id, e, entry["retries"], delay)
             else:
@@ -630,7 +638,9 @@ class OmpSession:
             # A dead child keeps the queue for the resume; nothing to retry.
             log.warning("[%s] queue head not fired (%s); kept queued", self.gw_id, e)
         else:
-            self.queue.pop(0)
+            # Remove by identity, not position: the entry may have been
+            # cancelled (or others added) while the submit was in flight.
+            self.queue = [e for e in self.queue if e["id"] != entry["id"]]
             self._publish_queue()
         finally:
             self._queue_task = None
@@ -728,7 +738,15 @@ class OmpSession:
         # error finds no pending future and is discarded with nothing in the
         # log; the turn failure itself still surfaces via prompt_result events,
         # which is what the client Retry chip keys on.
-        data = await self.command(cmd, message=message, timeout=30, late_errors=True, **extra)
+        try:
+            data = await self.command(cmd, message=message, timeout=30, late_errors=True, **extra)
+        except BaseException:
+            # omp refused the prompt at the RPC layer: no turn was started and
+            # no prompt_result will arrive, so the in-flight marker must not
+            # outlive the failure (a leaked True wedges is_busy forever).
+            if not steer:
+                self._turn_in_flight = False
+            raise
         if wait:
             loop = asyncio.get_running_loop()
             waiter = loop.create_future()
@@ -831,6 +849,7 @@ class OmpSession:
         # the partial accumulator is real usage but the turn did not complete,
         # so it is recorded as a failure, never a silent ok.
         self._turn_in_flight = False
+        self._cancel_queue_retry_timer()
         if not self._turn_flushed and self._turn_acc is not None:
             if self._turn_flush_timer is None:  # agent_end never ran
                 self._turn_failed = True

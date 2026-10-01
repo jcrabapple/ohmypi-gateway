@@ -30,10 +30,14 @@ class QueueTest(unittest.IsolatedAsyncioTestCase):
         self.fired: list[str] = []
         fired = self.fired  # the mock's `self` is the OmpSession, not the test
 
-        async def fake_prompt(self, message, wait=False, steer=False, timeout=600.0, images=None):
-            fired.append(message)
+        # Mock at the command() seam: the real prompt() runs, so the
+        # _turn_in_flight lifecycle is actually under test.
+        async def fake_command(self, type_, timeout=60.0, late_errors=False, **params):
+            if type_ in ("prompt", "follow_up", "steer"):
+                fired.append(params.get("message", ""))
+            return {"success": True, "data": {}}
 
-        self.patchers = [mock.patch.object(OmpSession, "prompt", fake_prompt)]
+        self.patchers = [mock.patch.object(OmpSession, "command", fake_command)]
         for p in self.patchers:
             p.start()
 
@@ -115,13 +119,17 @@ class QueueTest(unittest.IsolatedAsyncioTestCase):
     async def test_refused_submit_retries_then_gives_up(self):
         s = make_session(self.tmp.name)
         attempts: list[str] = []
+        inflight: list[bool] = []
 
-        async def refuse_then_accept(self, message, wait=False, steer=False, timeout=600.0, images=None):
-            attempts.append(message)
+        async def refuse_then_accept(self, type_, timeout=60.0, late_errors=False, **params):
+            attempts.append(params.get("message", ""))
+            # the in-flight marker must be live while the RPC is pending
+            inflight.append(self._turn_in_flight)
             if len(attempts) < 3:
                 raise RpcError("prompt", "session_busy", "session_busy")
+            return {"success": True, "data": {}}
 
-        with mock.patch.object(OmpSession, "prompt", refuse_then_accept):
+        with mock.patch.object(OmpSession, "command", refuse_then_accept):
             s.QUEUE_RETRY_BASE_S = 0.01  # before the add: the first retry schedules on add
             s.queue_add("stubborn", None)
             await asyncio.sleep(0)
@@ -129,15 +137,19 @@ class QueueTest(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.05)
             self.assertEqual(attempts.count("stubborn"), 3)
             self.assertEqual(s.queue, [])  # accepted on the third attempt
+            # every attempt ran with the marker live; after the accepted ack it
+            # stays live until prompt_result (correct: a turn is in flight)
+            self.assertTrue(all(inflight))
+            self.assertTrue(s._turn_in_flight)
 
     async def test_refused_submit_gives_up_after_five(self):
         s = make_session(self.tmp.name)
         s.QUEUE_RETRY_BASE_S = 0.01
 
-        async def refuse(self, message, wait=False, steer=False, timeout=600.0, images=None):
+        async def refuse(self, type_, timeout=60.0, late_errors=False, **params):
             raise RpcError("prompt", "session_busy", "session_busy")
 
-        with mock.patch.object(OmpSession, "prompt", refuse):
+        with mock.patch.object(OmpSession, "command", refuse):
             s.QUEUE_RETRY_BASE_S = 0.01
             s.queue_add("doomed", None)
             await asyncio.sleep(0)
@@ -145,14 +157,16 @@ class QueueTest(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.02)
             self.assertEqual(len(s.queue), 1)  # stays queued, still visible/editable
             self.assertEqual(s.queue[0]["retries"], 6)
+            # the last refusal cleared the marker: the session is not wedged
+            self.assertFalse(s._turn_in_flight)
 
     async def test_cancelled_submit_keeps_entry(self):
         s = make_session(self.tmp.name)
 
-        async def cancel_submit(self, message, wait=False, steer=False, timeout=600.0, images=None):
+        async def cancel_submit(self, type_, timeout=60.0, late_errors=False, **params):
             raise asyncio.CancelledError()
 
-        with mock.patch.object(OmpSession, "prompt", cancel_submit):
+        with mock.patch.object(OmpSession, "command", cancel_submit):
             s.queue_add("precious", None)
             await asyncio.sleep(0.05)
             self.assertEqual(len(s.queue), 1)

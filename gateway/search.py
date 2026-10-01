@@ -169,9 +169,13 @@ def refresh(root: Path | None = None) -> dict:
         con = _connect()
         try:
             on_disk: dict[str, tuple[float, int, int]] = {}
+            scanned: list[Path] = []
             for scan_root, archived in ((root, 0), (ARCHIVE_DIR, 1)):
                 if not scan_root.is_dir():
+                    # Absent/unmounted root: its files are NOT pruned below.
+                    # A temporarily missing mount must not wipe the index.
                     continue
+                scanned.append(scan_root.resolve())
                 for p in scan_root.rglob("*.jsonl*"):
                     if p.suffix not in (".jsonl", ".gz"):
                         continue
@@ -205,6 +209,11 @@ def refresh(root: Path | None = None) -> dict:
                 else:
                     added += 1
             for path in set(known) - set(on_disk):
+                # Prune only roots that were actually scanned: an absent
+                # archive mount is transient, its indexed files are not gone.
+                p = Path(path)
+                if not any(p.is_relative_to(sr) for sr in scanned):
+                    continue
                 con.execute("DELETE FROM messages WHERE path = ?", (path,))
                 con.execute("DELETE FROM files WHERE path = ?", (path,))
                 removed += 1
