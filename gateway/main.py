@@ -690,10 +690,12 @@ async def delete_saved_session(file: str = Query(min_length=1)):
     from .search import ARCHIVE_DIR as _ARCHIVE_ROOT, SESSIONS_DIR as _SEARCH_ROOT
 
     rp = Path(file).expanduser().resolve()
-    if not (rp.is_file() and ((_SEARCH_ROOT.resolve() in rp.parents) or (_ARCHIVE_ROOT.resolve() in rp.parents))):
+    if not ((_SEARCH_ROOT.resolve() in rp.parents) or (_ARCHIVE_ROOT.resolve() in rp.parents)):
         raise HTTPException(422, "file must be a saved session transcript")
     if rp.suffix not in (".jsonl", ".gz"):
         raise HTTPException(422, "file must be a saved session transcript (.jsonl)")
+    # Running check BEFORE existence: omp reports the session file path before
+    # the file is created on disk, so a live session may not have a file yet.
     await get_manager().reap_dead()
     if get_manager().find_by_file(str(rp)) is not None:
         raise HTTPException(409, "that session is running; stop it first")
