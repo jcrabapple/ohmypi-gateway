@@ -55,7 +55,7 @@ the host. Treat it like an SSH key.
 | Client | How |
 |---|---|
 | Native (desktop, mobile, CLI) | `Authorization: Bearer <token>` on every request. Store the token in the OS keychain/keystore. |
-| Web dashboard (same origin) | `POST /auth/login {"token": "..."}` sets an HttpOnly, Secure, SameSite=Strict session cookie (30 days). `POST /auth/logout` clears it. |
+| Web dashboard (same origin) | `POST /auth/login {"token": "..."}` sets an HttpOnly, SameSite=Strict session cookie (30 days); `Secure` is added when the request is HTTPS (detected via `X-Forwarded-Proto` from the loopback tunnel or the request scheme). `POST /auth/logout` clears it. |
 | Browser app on another origin | Bearer header over CORS (`Access-Control-Allow-Origin: *`, no credentials). WebSocket: first-message auth (below). |
 
 Rules that matter for client authors:
@@ -82,7 +82,7 @@ validation failures included, HTTP 422).
 |---|---|---|
 | GET | `/health` | gateway + omp liveness, live session count |
 | GET | `/system` | omp version/path, host, gateway limits |
-| GET | `/config` | `{raw, parsed, path}` of `~/.omp/agent/config.yml` |
+| GET | `/config` | `{raw, parsed, file}` of `~/.omp/agent/config.yml` (`file` is the config path; `parsed` is `null` with a `parseError` string when the YAML does not parse) |
 | PUT | `/config` | body = full YAML (`Content-Type: text/yaml`). Validated by omp; auto-reverted if omp rejects it |
 | GET | `/models?q=` | `omp models` catalog as text (`{raw}`) |
 | GET | `/catalog/models?refresh=` | `{"models": [...]}`, exactly what `omp models --json` emits (`provider`, `id`, `selector`, `name`, `contextWindow`, `maxTokens`, `reasoning`, `thinking` (`string[]` or `null`), `input`, `cost`). Cached in memory for 10 minutes; `refresh=1` bypasses the cache. First call can take up to about a minute. Use this, not the session's `/models` |
@@ -97,7 +97,10 @@ validation failures included, HTTP 422).
 One append-only SQLite row per completed agent turn, written by the bridge at
 `prompt_result` (which carries the turn's final status, so an aborted or
 failed turn is a row with `ok: false`), summed across the turn's assistant
-messages. `agent_end` is the fallback write if `prompt_result` never arrives.
+messages. If `prompt_result` never arrives, `agent_end` arms a 30-second grace
+timer that writes the row as a fallback; a child that exits inside that window
+flushes the pending row at exit (a turn where no assistant message ever arrived
+writes nothing).
 The database lives at `~/.omp/ompgw-ledger.db` (override with
 `OMPGW_LEDGER_DB`), WAL mode, schema-migrated stepwise via `PRAGMA
 user_version` (currently version 1); a database from a newer gateway disables
@@ -120,7 +123,7 @@ session is a transcript on disk that can be resumed.
 | POST | `/sessions` | start: `{cwd?, model?, thinking?, approvalMode?, resumeFrom?, advisor?}`. `approvalMode` is `yolo` (default) \| `write` \| `always-ask`. `resumeFrom` must be a file under `~/.omp/agent/sessions` (see Resuming below). `advisor` (default false) launches the child with `--advisor` (omp's advisor runtime); launch-time only — no mid-session toggle, carried through forks |
 | GET | `/sessions/{id}` | session info (below) |
 | DELETE | `/sessions/{id}` | stop the child; transcript stays on disk |
-| POST | `/sessions/{id}/prompt` | `{message, images?, mode?, wait?, timeout?}`. `images` is up to 4 of `{"type":"image","data":"<base64>","mimeType":"image/png"|"image/jpeg"|"image/webp"|"image/gif"}` (max 5 MB decoded each; raw base64 only, no `data:` prefix) and is forwarded to omp on every mode. Bad type, mime, base64, size, or file signature (magic bytes are checked against the claimed mime type) is 422. `message` may be empty when images are present. `mode`: `prompt` \| `steer` (inject into the running turn) \| `follow_up` (queue for after it). Returns immediately with the ack; follow progress on the WebSocket. `wait:true` blocks until the turn ends and adds `lastAssistantText` (see note) |
+| POST | `/sessions/{id}/prompt` | `{message, images?, mode?, wait?, timeout?}`. `images` is up to 4 of `{"type":"image","data":"<base64>","mimeType":"image/png"|"image/jpeg"|"image/webp"|"image/gif"}` (max 5 MB decoded each; raw base64 only, no `data:` prefix) and is forwarded to omp on every mode. Bad type, mime, base64, size, or file signature (magic bytes are checked against the claimed mime type) is 422. `message` is required and must be a string even when images carry the whole content (send `""`). `mode`: `prompt` \| `steer` (inject into the running turn) \| `follow_up` (queue for after it). Returns immediately with the ack; follow progress on the WebSocket. `wait:true` blocks until the turn ends and adds `lastAssistantText` (see note) |
 | POST | `/sessions/{id}/abort` | stop the current turn |
 | POST | `/sessions/{id}/retry` | re-run the last failed turn (omp `abort_retry`). An omp-level error (nothing to retry, unknown command on older omp) is 400 like every command route |
 | POST | `/sessions/{id}/compact` | `{instructions?}` |
@@ -133,7 +136,7 @@ session is a transcript on disk that can be resumed.
 | GET | `/sessions/{id}/subagents/{sid}/messages?from=` | one subagent's transcript via omp `get_subagent_messages` (`subagentId`, `fromByte`): `{messages, nextByte, reset, sessionFile}`. Page forward with `from=<nextByte>` while `nextByte` is present. Unknown `sid` is an omp command error → 400 |
 | GET | `/sessions/{id}/stats` | token/cost stats |
 | POST | `/sessions/{id}/model` | `{provider, modelId}` (both required; values from `/catalog/models`) |
-| POST | `/sessions/{id}/thinking` | `{level}`: off, minimal, low, medium, high, xhigh, max |
+| POST | `/sessions/{id}/thinking` | `{level}`: off, minimal, low, medium, high, xhigh, max, auto |
 | POST | `/sessions/{id}/name` | `{name}` |
 | GET | `/sessions/{id}/models` | models available to this session (RPC `get_available_models`; takes minutes, prefer `/catalog/models`) |
 | GET | `/sessions/{id}/commands` | slash commands available |
@@ -174,7 +177,8 @@ one-tap pick, and should treat a missing key (older gateways) as unknown.
 
 Session info fields: `gwId`, `cwd`, `approvalMode`, `resumedFrom`, `ompSessionId`,
 `ompSessionFile`, `ompSessionName`, `model`, `thinkingLevel`, `advisor` (bool), `isStreaming`,
-`idleSec`, `exited`, `protocolVersion`, `messageCount`, `contextUsage`,
+`idleSec`, `exited`, `exitCode` (null until exit), `protocolVersion`, `uptimeSec`,
+`subscribers` (live WS count), `messageCount`, `contextUsage`,
 `lastEventSeq`, `pendingUi`.
 
 ## WebSocket: `/omp-ws/{id}?after=<seq>`
@@ -220,7 +224,11 @@ cursor), `4429` IP locked out.
 
 **Client → server frames:** `"ping"`; any omp RpcCommand as JSON, e.g.
 `{"id":"c1","type":"get_state"}`, answered with an `rpc_response` control frame
-echoing your `id`; `extension_ui_response` to answer a dialog.
+echoing your `id`; `extension_ui_response` to answer a dialog. Parameter keys
+must be identifiers and must not be `timeout` or `late_errors` (those are
+gateway call semantics): a bad key is answered with a failing `rpc_response`,
+not a dropped socket. `host_tool_result` / `host_tool_update` / `host_uri_result`
+frames are passed through to omp untouched (host tool bridges).
 
 Events worth handling for a chat view: `agent_start`/`agent_end` (busy state),
 `message_start`/`message_update`/`message_end` (streaming text; `message.content`
