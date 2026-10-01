@@ -57,8 +57,11 @@ async function turnOn(): Promise<void> {
 async function turnOff(): Promise<void> {
   if (push.busy) return;
   push = { ...push, busy: true };
-  await disablePush();
-  await refreshPush();
+  try {
+    await disablePush();
+  } finally {
+    await refreshPush();
+  }
 }
 
   const rows = $derived.by(() => {
