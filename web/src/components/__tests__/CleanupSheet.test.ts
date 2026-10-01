@@ -6,7 +6,10 @@ import CleanupSheet from '../CleanupSheet.svelte';
 import { buttonNamed, cleanup, render, settle } from './mount';
 import type { SavedSession } from '../../lib/api/types';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  pins.clear();
+});
 
 function saved(over: Partial<SavedSession> = {}): SavedSession {
   return {

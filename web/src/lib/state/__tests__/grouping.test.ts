@@ -141,3 +141,28 @@ describe('pinned sessions', () => {
     expect(g.history[0]?.items.map((s) => s.file)).toEqual(['/s/a.jsonl']);
   });
 });
+
+describe('pinned sessions: exclusion and ordering', () => {
+  it('drops saved sessions from Pinned when they are live or running', () => {
+    const livePinned = saved('/s/live.jsonl', sec(new Date(2026, 7, 15)));
+    const runningPinned = saved('/s/running.jsonl', sec(new Date(2026, 7, 14)), { running: true });
+    const pinnedOnly = saved('/s/pinned.jsonl', sec(new Date(2026, 7, 13)));
+    const g = groupSessions(
+      [live('busy', { ompSessionFile: '/s/live.jsonl' })],
+      [livePinned, runningPinned, pinnedOnly],
+      NOW,
+      new Set(),
+      new Set(),
+      new Set(['/s/live.jsonl', '/s/running.jsonl', '/s/pinned.jsonl']),
+    );
+    expect(g.pinned.map((s) => s.file)).toEqual(['/s/pinned.jsonl']);
+  });
+
+  it('orders pinned sessions newest first', () => {
+    const a = saved('/s/a.jsonl', 1000);
+    const b = saved('/s/b.jsonl', 3000);
+    const c = saved('/s/c.jsonl', 2000);
+    const g = groupSessions([], [a, b, c], NOW, new Set(), new Set(), new Set(['/s/a.jsonl', '/s/b.jsonl', '/s/c.jsonl']));
+    expect(g.pinned.map((s) => s.file)).toEqual(['/s/b.jsonl', '/s/c.jsonl', '/s/a.jsonl']);
+  });
+});

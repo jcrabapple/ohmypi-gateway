@@ -73,6 +73,8 @@
     return kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${Math.round(kb)} KB`;
   }
 
+  const pinnedEligible = $derived(saved.filter((s) => pins.protectedFromCleanup(s.file)).length);
+
   const eligible = $derived(saved.filter((s) => !s.running));
 
   async function deleteSelected(): Promise<void> {
@@ -142,7 +144,7 @@
     </div>
 
     <div class="sel-row">
-      <span class="count">{visible.length} of {eligible.length} shown{pins.files.size ? `, ${pins.files.size} pinned` : ''}, {selected.size} selected</span>
+      <span class="count">{visible.length} of {eligible.length} shown{pinnedEligible ? `, ${pinnedEligible} pinned` : ''}, {selected.size} selected</span>
       <span class="spacer"></span>
       <button type="button" class="btn btn-sm" onclick={selectVisible}>Select shown</button>
       <button type="button" class="btn btn-sm btn-ghost" onclick={clearSelection}>None</button>

@@ -49,3 +49,12 @@ describe('RailRow', () => {
     expect(picks).toEqual(['review']);
   });
 });
+
+it('marks pinned sessions with a pin badge in the title', () => {
+  const { target } = render(RailRow, { title: 't', sub: 's', pinned: true, onclick: () => {} });
+  const pin = target.querySelector('.title .pinned-mark');
+  expect(pin).not.toBeNull();
+  expect(pin!.getAttribute('role')).toBe('img');
+  expect(pin!.getAttribute('aria-label')).toBe('Pinned');
+  expect(pin!.querySelector('svg')).not.toBeNull();
+});

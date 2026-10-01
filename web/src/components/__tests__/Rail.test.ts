@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { flushSync } from 'svelte';
 import type { SavedSession, SessionInfo } from '../../lib/api/types';
 import { storageKey } from '../../lib/platform/storage';
 import { pins, reviewed, sessionsStore } from '../../lib/state';
