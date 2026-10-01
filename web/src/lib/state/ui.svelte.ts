@@ -3,7 +3,7 @@
 
 import type { SettingsTarget } from '../palette/settings-index';
 
-export type OverlayId = 'drawer' | 'palette' | 'new-session' | 'settings' | 'inspector' | 'session-info';
+export type OverlayId = 'drawer' | 'palette' | 'new-session' | 'settings' | 'inspector' | 'session-info' | 'session-cleanup';
 
 export interface Toast {
   id: number;

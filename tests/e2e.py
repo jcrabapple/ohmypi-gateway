@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -779,6 +780,21 @@ try:
     check("queue-edit-unknown-404", code == 404, f"-> {code}")
     code, data, _ = req("DELETE", f"/api/sessions/{gid}/queue/q9999")
     check("queue-remove-unknown-404", code == 404, f"-> {code}")
+
+    # cleanup: saved-transcript delete guards + litter vacuum
+    code, data, _ = req("DELETE", "/api/sessions/saved?file=/etc/passwd")
+    check("cleanup-delete-rejects-outside-root", code == 422, f"-> {code}")
+    info = ok("GET", f"/api/sessions/{gid}")
+    live_file = info.get("ompSessionFile")
+    if live_file:
+        code, data, _ = req("DELETE", f"/api/sessions/saved?file={urllib.request.quote(live_file)}")
+        check("cleanup-delete-refuses-running", code == 409, f"-> {code}")
+    else:
+        check("cleanup-delete-refuses-running", True, "no live file reported")
+
+    code, data, _ = req("POST", "/api/sessions/vacuum")
+    check("cleanup-vacuum-shape", code == 200 and isinstance(data.get("removedDirs"), int)
+          and isinstance(data.get("removedPointers"), int), f"-> {code} {data}")
 finally:
     req("DELETE", f"/api/sessions/{gid}")
 

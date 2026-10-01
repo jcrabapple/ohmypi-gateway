@@ -143,6 +143,9 @@
     <button type="button" class="icon-btn" aria-label="Search transcripts" title="Search transcripts" aria-pressed={nav.search} onclick={() => nav.openSearch()}>
       <Icon name="search" />
     </button>
+    <button type="button" class="icon-btn" aria-label="Clean up sessions" title="Clean up sessions" onclick={() => openOverlay('session-cleanup')}>
+      <Icon name="broom" />
+    </button>
     <button
       type="button"
       class="icon-btn"

@@ -171,6 +171,8 @@ session is a transcript on disk that can be resumed.
 | GET | `/sessions/{id}/queue` | the gateway-held follow-up queue: `{queue: [{id, message, ts, images}]}` (images is a count) |
 | PATCH | `/sessions/{id}/queue/{qid}` | edit a queued follow-up before it fires: `{message?, images?}`; 404 when it already fired or was cancelled, 422 on a blank message |
 | DELETE | `/sessions/{id}/queue/{qid}` | cancel a queued follow-up; 404 when it already fired or was cancelled |
+| DELETE | `/sessions/saved?file=` | delete a saved transcript file. `file` must resolve under the live sessions dir or the gc archive; a transcript a live session is writing is 409. Search prunes it on the next refresh |
+| POST | `/sessions/vacuum` | sweep storage litter: bucket dirs with no transcripts under them, and custom-session-files pointers whose target is gone. `-> {removedDirs, removedPointers}`. Never touches transcripts |
 | POST | `/sessions/{id}/abort` | stop the current turn |
 | POST | `/sessions/{id}/retry` | re-run the last failed turn (omp `abort_retry`). An omp-level error (nothing to retry, unknown command on older omp) is 400 like every command route |
 | POST | `/sessions/{id}/compact` | `{instructions?}` |

@@ -70,6 +70,9 @@ export const host = {
 export const sessions = {
   list: (limit = 60, signal?: AbortSignal) =>
     api<SessionsList>(`/api/sessions?limit=${limit}`, { signal }),
+  deleteSaved: (file: string) =>
+    api<{ ok: boolean }>(`/api/sessions/saved?file=${encodeURIComponent(file)}`, { method: 'DELETE' }),
+  vacuum: () => api<{ removedDirs: number; removedPointers: number }>('/api/sessions/vacuum', { method: POST }),
   queue: (id: string) => api<{ queue: QueueEntry[] }>(`${sid(id)}/queue`),
   queueEdit: (id: string, qid: string, message: string) =>
     api<{ entry: QueueEntry }>(`${sid(id)}/queue/${encodeURIComponent(qid)}`, {

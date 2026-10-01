@@ -682,6 +682,55 @@ async def list_sessions(include_saved: bool = True, limit: int = 100):
     return {"live": live, "saved": saved}
 
 
+@app.delete("/api/sessions/saved")
+async def delete_saved_session(file: str = Query(min_length=1)):
+    """Delete a saved (not running) transcript. `file` must be a session file
+    under the live sessions dir or the gc archive; a file a live session is
+    writing is refused (409). The search index prunes it on the next refresh."""
+    from .search import ARCHIVE_DIR as _ARCHIVE_ROOT, SESSIONS_DIR as _SEARCH_ROOT
+
+    rp = Path(file).expanduser().resolve()
+    if not (rp.is_file() and ((_SEARCH_ROOT.resolve() in rp.parents) or (_ARCHIVE_ROOT.resolve() in rp.parents))):
+        raise HTTPException(422, "file must be a saved session transcript")
+    for sess in get_manager().sessions.values():
+        if sess.omp_session_file and Path(sess.omp_session_file).resolve() == rp:
+            raise HTTPException(409, "that session is running; stop it first")
+    rp.unlink()
+    return {"ok": True}
+
+
+@app.post("/api/sessions/vacuum")
+async def vacuum_sessions():
+    """Sweep storage litter the way scripts/omp-sessions.py does: bucket dirs
+    with no transcript files left under them, and custom-session-files
+    pointers whose target no longer exists. Never touches transcripts."""
+    import shutil
+
+    from .search import SESSIONS_DIR
+
+    removed_dirs = removed_pointers = 0
+    if SESSIONS_DIR.is_dir():
+        for child in list(SESSIONS_DIR.iterdir()):
+            if not child.is_dir():
+                continue
+            has_files = any(child.rglob("*.jsonl*"))
+            if not has_files:
+                shutil.rmtree(child, ignore_errors=True)
+                if not child.exists():
+                    removed_dirs += 1
+    pointers_dir = OMP_AGENT_DIR / "custom-session-files"
+    if pointers_dir.is_dir():
+        for ptr in list(pointers_dir.iterdir()):
+            try:
+                target = ptr.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                target = ""
+            if not target or not Path(target).is_file():
+                ptr.unlink(missing_ok=True)
+                removed_pointers += 1
+    return {"removedDirs": removed_dirs, "removedPointers": removed_pointers}
+
+
 @app.post("/api/sessions")
 async def create_session(request: Request):
     body = await json_body(request)
