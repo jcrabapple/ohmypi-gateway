@@ -135,12 +135,16 @@ base64url - malformed keys are 422, never stored. Endpoints that answer
 
 ### Cross-session search
 
-`GET /api/search?q=&limit=&role=&refresh=` — full-text search over saved
-session transcripts (user/assistant text blocks only; thinking and tool output
-are not indexed). The FTS5 index lives at `search-index.db` next to
-`auth-token` (override: `OMPGW_SEARCH_DB`; the transcript root:
-`OMPGW_SESSIONS_DIR`). It refreshes incrementally on request, at most once per
+`GET /api/search?q=&limit=&role=&refresh=` — full-text search over saved AND
+archived session transcripts (live dir plus omp's gc archive, including
+gzipped `.jsonl.gz` files; user/assistant text blocks only, thinking and tool
+output are not indexed). The FTS5 index lives at `search-index.db` next to
+`auth-token` (override: `OMPGW_SEARCH_DB`; roots: `OMPGW_SESSIONS_DIR` and
+`OMPGW_ARCHIVE_DIR`). It refreshes incrementally on request, at most once per
 30 seconds (`refresh=1` forces), and prunes deleted transcripts automatically.
+
+Archived hits carry `"archived": true` and are resumable: resuming one restores
+a decompressed copy into the live sessions dir (`restored/`) and opens that.
 
 Every query word is a prefix match; raw FTS5 syntax from the client is
 stripped, so it can neither error the query nor widen it. Results are ranked
@@ -164,6 +168,9 @@ session is a transcript on disk that can be resumed.
 | GET | `/sessions/{id}` | session info (below) |
 | DELETE | `/sessions/{id}` | stop the child; transcript stays on disk |
 | POST | `/sessions/{id}/prompt` | `{message, images?, mode?, wait?, timeout?}`. `images` is up to 4 of `{"type":"image","data":"<base64>","mimeType":"image/png"|"image/jpeg"|"image/webp"|"image/gif"}` (max 5 MB decoded each; raw base64 only, no `data:` prefix) and is forwarded to omp on every mode. Bad type, mime, base64, size, or file signature (magic bytes are checked against the claimed mime type) is 422. `message` is required and must be a string even when images carry the whole content (send `""`). `mode`: `prompt` \| `steer` (inject into the running turn) \| `follow_up` (queue for after it). Returns immediately with the ack; follow progress on the WebSocket. `wait:true` blocks until the turn ends and adds `lastAssistantText` (see note) |
+| GET | `/sessions/{id}/queue` | the gateway-held follow-up queue: `{queue: [{id, message, ts, images}]}` (images is a count) |
+| PATCH | `/sessions/{id}/queue/{qid}` | edit a queued follow-up before it fires: `{message?, images?}`; 404 when it already fired or was cancelled, 422 on a blank message |
+| DELETE | `/sessions/{id}/queue/{qid}` | cancel a queued follow-up; 404 when it already fired or was cancelled |
 | POST | `/sessions/{id}/abort` | stop the current turn |
 | POST | `/sessions/{id}/retry` | re-run the last failed turn (omp `abort_retry`). An omp-level error (nothing to retry, unknown command on older omp) is 400 like every command route |
 | POST | `/sessions/{id}/compact` | `{instructions?}` |

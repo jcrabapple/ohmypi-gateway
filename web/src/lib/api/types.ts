@@ -83,6 +83,8 @@ export interface SessionInfo {
   contextUsage: ContextUsage | null;
   lastEventSeq: number;
   pendingUi: UiRequest[];
+  /** Gateway-held queued follow-ups (editable until they fire). */
+  queue?: QueueEntry[];
 }
 
 export interface SavedSession {
@@ -573,8 +575,17 @@ export interface SearchHit {
   sessionId: string | null;
   cwd: string | null;
   title: string | null;
+  archived?: boolean;
   /** Present when that transcript is currently live on the gateway. */
   gwId?: string | null;
+}
+
+/** One gateway-held queued follow-up (GET /sessions/{id}/queue). */
+export interface QueueEntry {
+  id: string;
+  message: string;
+  ts: number;
+  images: number;
 }
 
 /** GET /api/search?q= */

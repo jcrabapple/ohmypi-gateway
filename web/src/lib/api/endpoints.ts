@@ -3,7 +3,7 @@
 import { api, resetSignedOut } from './client';
 import type {
   ApprovalMode, CatalogModels, CommandsResponse, EntriesResponse, EventsResponse, FileIndexEntry, FilesResponse,
-  ForkResponse, LedgerResponse, LedgerSessionsResponse, MessagesResponse, SavedSession, SearchResponse,
+  ForkResponse, LedgerResponse, LedgerSessionsResponse, MessagesResponse, QueueEntry, SavedSession, SearchResponse,
   SessionInfo, SessionsList, SessionState, SessionStats, SubagentMessagesResponse, SystemInfo, ThinkingLevel,
   UiAnswer, UiRequest,
 } from './types';
@@ -70,6 +70,13 @@ export const host = {
 export const sessions = {
   list: (limit = 60, signal?: AbortSignal) =>
     api<SessionsList>(`/api/sessions?limit=${limit}`, { signal }),
+  queue: (id: string) => api<{ queue: QueueEntry[] }>(`${sid(id)}/queue`),
+  queueEdit: (id: string, qid: string, message: string) =>
+    api<{ entry: QueueEntry }>(`${sid(id)}/queue/${encodeURIComponent(qid)}`, {
+      method: 'PATCH', body: { message },
+    }),
+  queueRemove: (id: string, qid: string) =>
+    api<{ ok: boolean }>(`${sid(id)}/queue/${encodeURIComponent(qid)}`, { method: 'DELETE' }),
   create: (body: NewSession) => api<SessionInfo & SessionOpenFlags>('/api/sessions', { method: POST, body }),
   resume: (saved: Pick<SavedSession, 'file'>) =>
     api<SessionInfo & SessionOpenFlags>('/api/sessions', { method: POST, body: { resumeFrom: saved.file } }),

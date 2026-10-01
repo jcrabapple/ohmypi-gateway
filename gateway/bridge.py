@@ -45,6 +45,12 @@ UI_DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
 STDOUT_LINE_LIMIT = 64 * 1024 * 1024  # bytes per stdout line from omp
 _MAX_CHUNK_GROUPS = 64  # unfinished rpc_chunk reassembly buffers before eviction
 
+# Sentinel for "argument not provided" in queue_edit (None is a real value for images).
+class _Unset:
+    __slots__ = ()
+
+_UNSET = _Unset()
+
 # prompt_result statuses that mark a turn failed or aborted (ok = 0 in the ledger).
 _TURN_FAILURE_STATUSES = ("error", "failed", "aborted")
 # omp emits agent_end BEFORE prompt_result, so the ledger row waits for
@@ -168,6 +174,14 @@ class OmpSession:
         self._pushed_dialogs: set[str] = set()
         # Strong refs to in-flight push tasks (see _maybe_push_dialog).
         self._push_tasks: set[asyncio.Task] = set()
+        # Gateway-owned follow-up queue. omp's own queue is count-only (no RPC
+        # to list/edit/cancel), so follow_up prompts are held here and fired
+        # head-first after a turn ends successfully. In-memory by design: a
+        # gateway restart kills the omp children, so an omp-side queue would
+        # not survive either. See queue_add/queue_list/... below.
+        self.queue: list[dict] = []
+        self._queue_task: asyncio.Task | None = None
+        self._queue_seq = 0
 
         self.proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
@@ -341,6 +355,10 @@ class OmpSession:
             # either way there is nothing to record.
             if not self._turn_flushed and self._turn_acc is not None:
                 await self._ledger_flush()
+            # A successful turn end is when a queued follow-up fires. Aborted
+            # or failed turns keep the queue (the user can cancel or retry).
+            if obj.get("status") not in _TURN_FAILURE_STATUSES:
+                self._maybe_fire_queue()
         elif ftype == "agent_end":
             self.streaming = False
             if not self._turn_flushed:
@@ -521,6 +539,75 @@ class OmpSession:
     def _log_push_error(task: asyncio.Task) -> None:
         if not task.cancelled() and task.exception() is not None:
             log.warning("push_dialog task failed", exc_info=task.exception())
+
+    # ------------------------------------------------------- follow-up queue
+
+    def queue_list(self) -> list[dict]:
+        """Queue entries as clients see them: image payloads stripped to a
+        count (they are base64 megabytes)."""
+        return [{"id": e["id"], "message": e["message"], "ts": e["ts"],
+                 "images": len(e["images"] or [])} for e in self.queue]
+
+    def _publish_queue(self) -> None:
+        asyncio.get_running_loop().create_task(
+            self._publish({"type": "queue_changed", "queue": self.queue_list()}))
+
+    def queue_add(self, message: str, images: list[dict] | None) -> dict:
+        self._queue_seq += 1
+        entry = {"id": f"q{self._queue_seq}", "message": message,
+                 "images": images, "ts": time.time()}
+        self.queue.append(entry)
+        self._publish_queue()
+        # Queued while idle: nothing will fire it at turn end, so send now.
+        if not self.is_busy():
+            self._maybe_fire_queue()
+        return entry
+
+    def queue_edit(self, qid: str, message: str | None = None,
+                   images: list[dict] | None | _Unset = _UNSET) -> dict | None:
+        for entry in self.queue:
+            if entry["id"] == qid:
+                if message is not None:
+                    entry["message"] = message
+                if not isinstance(images, _Unset):
+                    entry["images"] = images
+                self._publish_queue()
+                return entry
+        return None
+
+    def queue_remove(self, qid: str) -> bool:
+        before = len(self.queue)
+        self.queue = [e for e in self.queue if e["id"] != qid]
+        if len(self.queue) != before:
+            self._publish_queue()
+            return True
+        return False
+
+    def _maybe_fire_queue(self) -> None:
+        """Fire the queue head after a successful turn (called at prompt_result
+        ok and after queue_add while idle). Never awaits inline: the reader
+        loop dispatches this."""
+        if self.streaming or not self.queue or self._queue_task is not None:
+            return
+        self._queue_task = asyncio.get_running_loop().create_task(self._fire_queue_head())
+
+    async def _fire_queue_head(self) -> None:
+        entry = self.queue.pop(0)
+        self._publish_queue()
+        try:
+            # wait=False: ack is enough; the fired prompt runs as its own turn
+            # and its prompt_result triggers the next head.
+            await self.prompt(entry["message"], wait=False, steer=False,
+                              images=entry.get("images"))
+        except (RpcError, ProcessDead) as e:
+            # Put it back at the head: a session_busy ack means omp was still
+            # finishing, and the next turn end retries; a dead child keeps the
+            # queue for the resume.
+            self.queue.insert(0, entry)
+            self._publish_queue()
+            log.warning("[%s] queue head not fired (%s); kept queued", self.gw_id, e)
+        finally:
+            self._queue_task = None
 
     async def answer_ui(self, request_id: str, response: dict) -> dict:
         """Answer a pending dialog. Raises KeyError if it is not pending
@@ -787,6 +874,7 @@ class OmpSession:
             "contextUsage": st.get("contextUsage"),
             "lastEventSeq": self._backlog_seq,
             "pendingUi": list(self.pending_ui.values()),
+            "queue": self.queue_list(),
         }
 
 

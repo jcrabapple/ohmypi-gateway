@@ -16,6 +16,7 @@ neither error the query nor widen it.
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import os
@@ -32,7 +33,12 @@ SEARCH_DB = Path(os.environ.get("OMPGW_SEARCH_DB") or PROJECT_DIR / "search-inde
 SESSIONS_DIR = Path(
     os.environ.get("OMPGW_SESSIONS_DIR") or str(Path.home() / ".omp" / "agent" / "sessions")
 )
-SCHEMA_VERSION = 1
+# omp gc's archive: gzipped transcripts move here. Indexed read-only; hits
+# are marked archived and get restored into SESSIONS_DIR on resume.
+ARCHIVE_DIR = Path(
+    os.environ.get("OMPGW_ARCHIVE_DIR") or str(Path.home() / ".omp" / "agent" / "archive" / "sessions")
+)
+SCHEMA_VERSION = 2
 # How long a fresh-enough index is trusted before the next route call rescans.
 REFRESH_MIN_INTERVAL_S = 30
 _TOKEN = re.compile(r"[\w][\w./+-]*")
@@ -66,6 +72,9 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
         raise RuntimeError(
             f"search index schema v{version} is newer than this gateway (v{SCHEMA_VERSION}); "
             "delete the index file or upgrade")
+    if version == 1:
+        # v1 had no archived flag on files. Small corpus: drop and rebuild.
+        con.executescript("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS messages;")
     con.executescript(
         """
         CREATE TABLE IF NOT EXISTS files (
@@ -74,7 +83,8 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
             size INTEGER NOT NULL,
             session_id TEXT,
             cwd TEXT,
-            title TEXT
+            title TEXT,
+            archived INTEGER NOT NULL DEFAULT 0
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS messages USING fts5(
             body,
@@ -99,12 +109,14 @@ def _title_of(head_user_text: str) -> str:
 
 def _parse_file(path: Path) -> tuple[list[dict], dict]:
     """(message rows, file meta). Bad lines are skipped; the session header
-    supplies cwd/session id (same format bridge.read_session_cwd relies on)."""
+    supplies cwd/session id (same format bridge.read_session_cwd relies on).
+    Archive transcripts are gzipped (.jsonl.gz)."""
     rows: list[dict] = []
     session_id = cwd = None
     first_user = ""
     try:
-        with path.open("rb") as fh:
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rb") as fh:
             for line_no, raw in enumerate(fh, 1):
                 try:
                     obj = json.loads(raw)
@@ -156,18 +168,22 @@ def refresh(root: Path | None = None) -> dict:
     with _lock:
         con = _connect()
         try:
-            on_disk: dict[str, tuple[float, int]] = {}
-            if root.is_dir():
-                for p in root.rglob("*.jsonl"):
+            on_disk: dict[str, tuple[float, int, int]] = {}
+            for scan_root, archived in ((root, 0), (ARCHIVE_DIR, 1)):
+                if not scan_root.is_dir():
+                    continue
+                for p in scan_root.rglob("*.jsonl*"):
+                    if p.suffix not in (".jsonl", ".gz"):
+                        continue
                     try:
                         st = p.stat()
                     except OSError:
                         continue
-                    on_disk[str(p.resolve())] = (st.st_mtime, st.st_size)
+                    on_disk[str(p.resolve())] = (st.st_mtime, st.st_size, archived)
             known = {r["path"]: (r["mtime"], r["size"])
                      for r in con.execute("SELECT path, mtime, size FROM files")}
             added = updated = removed = 0
-            for path, (mtime, size) in on_disk.items():
+            for path, (mtime, size, archived) in on_disk.items():
                 if known.get(path) == (mtime, size):
                     continue
                 rows, meta = _parse_file(Path(path))
@@ -175,12 +191,12 @@ def refresh(root: Path | None = None) -> dict:
                     # unreadable file (permissions, vanished mid-scan): skip it
                     # this round rather than inserting a half-empty row
                     continue
-                meta["mtime"], meta["size"] = mtime, size
+                meta["mtime"], meta["size"], meta["archived"] = mtime, size, archived
                 con.execute("DELETE FROM messages WHERE path = ?", (path,))
                 con.execute("DELETE FROM files WHERE path = ?", (path,))
                 con.execute(
-                    "INSERT INTO files (path, mtime, size, session_id, cwd, title) "
-                    "VALUES (:path, :mtime, :size, :session_id, :cwd, :title)", meta)
+                    "INSERT INTO files (path, mtime, size, session_id, cwd, title, archived) "
+                    "VALUES (:path, :mtime, :size, :session_id, :cwd, :title, :archived)", meta)
                 con.executemany(
                     "INSERT INTO messages (body, path, line, role, ts) "
                     "VALUES (:body, :path, :line, :role, :ts)", rows)
@@ -258,7 +274,7 @@ def query(q: str, limit: int = 40, role: str | None = None) -> dict:
             f"""
             SELECT m.path, m.line, m.role, m.ts,
                    snippet(messages, 0, '{_MARK_OPEN}', '{_MARK_CLOSE}', '…', 24) AS snippet,
-                   f.session_id AS session_id, f.cwd, f.title
+                   f.session_id AS session_id, f.cwd, f.title, f.archived AS archived
             FROM messages m
             LEFT JOIN files f ON f.path = m.path
             {where}
@@ -278,6 +294,7 @@ def query(q: str, limit: int = 40, role: str | None = None) -> dict:
                 "sessionId": r["session_id"],
                 "cwd": r["cwd"],
                 "title": r["title"],
+                "archived": bool(r["archived"]),
             })
         return {"total": total, "results": results}
     finally:

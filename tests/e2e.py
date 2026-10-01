@@ -739,11 +739,42 @@ check("search-unsearchable-is-empty-not-500", code == 200 and data.get("total") 
 r = ok("GET", "/api/search?q=omp&limit=3")
 if r["results"]:
     hit = r["results"][0]
-    check("search-hit-shape", all(k in hit for k in ("path", "line", "role", "snippet", "gwId")),
+    check("search-hit-shape", all(k in hit for k in ("path", "line", "role", "snippet", "gwId", "archived")),
           f"keys={sorted(hit)}")
     check("search-honors-limit", len(r["results"]) <= 3, f"-> {len(r['results'])}")
 else:
     check("search-hit-shape", True, "no hits to shape-check")
+
+# --- queue ----------------------------------------------------------------
+
+code, open_res = req("POST", "/api/sessions", {"cwd": "/tmp", "approvalMode": "yolo"})[0:2]
+gid = open_res["gwId"]
+try:
+    code, data, _ = req("POST", f"/api/sessions/{gid}/prompt", {"message": "queue probe one", "mode": "follow_up"})
+    check("queue-add", code == 200 and data.get("ack", {}).get("queued") is True, f"-> {code} {data.get('ack')}")
+    qid = (data.get("ack") or {}).get("id")
+
+    code, data, _ = req("GET", f"/api/sessions/{gid}/queue")
+    check("queue-list", code == 200 and len(data.get("queue", [])) == 1
+          and data["queue"][0]["message"] == "queue probe one", f"-> {code} {data}")
+
+    code, data, _ = req("PATCH", f"/api/sessions/{gid}/queue/{qid}", {"message": "queue probe edited"})
+    check("queue-edit", code == 200 and data.get("entry", {}).get("message") == "queue probe edited",
+          f"-> {code} {data}")
+
+    code, data, _ = req("PATCH", f"/api/sessions/{gid}/queue/{qid}", {"message": "   "})
+    check("queue-edit-rejects-blank", code == 422, f"-> {code}")
+
+    code, data, _ = req("PATCH", f"/api/sessions/{gid}/queue/q9999", {"message": "x"})
+    check("queue-edit-unknown-404", code == 404, f"-> {code}")
+
+    code, data, _ = req("DELETE", f"/api/sessions/{gid}/queue/{qid}")
+    check("queue-remove", code == 200 and data.get("ok") is True, f"-> {code}")
+
+    code, data, _ = req("DELETE", f"/api/sessions/{gid}/queue/{qid}")
+    check("queue-remove-unknown-404", code == 404, f"-> {code}")
+finally:
+    req("DELETE", f"/api/sessions/{gid}")
 
 print(f"\n{BASE}: " + ("all green" if not failures else f"FAILURES: {failures}"))
 sys.exit(1 if failures else 0)

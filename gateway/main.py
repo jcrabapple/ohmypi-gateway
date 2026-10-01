@@ -42,6 +42,7 @@ from .bridge import (
     OMP_BIN,
     ProcessDead,
     RpcError,
+    _UNSET,
     canonical_path,
     get_manager,
     read_session_cwd,
@@ -49,7 +50,7 @@ from .bridge import (
 )
 from .ledger import DEFAULT_DAYS, close_ledger, get_ledger
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PROJECT_DIR / "static"
 # Built web client. Served when WEB_DIST/index.html exists, else the Alpine dashboard.
@@ -460,6 +461,33 @@ async def push_unsubscribe(request: Request):
     return {"ok": True, "subscriptions": push_mod.unsubscribe(endpoint)}
 
 
+def _restore_archived(archived_path: Path) -> Path:
+    """Copy a gzipped (or plain) archived transcript into the live sessions
+    dir so it becomes a normal resumable file. Idempotent-ish: a restore of
+    the same archive reuses the first restore's path when still present."""
+    import gzip
+    from .search import ARCHIVE_DIR, SESSIONS_DIR
+
+    out_dir = SESSIONS_DIR / "restored"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = archived_path.name
+    for suffix in (".jsonl.gz", ".gz", ".jsonl"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    existing = sorted(out_dir.glob(f"{stem}*.jsonl"))
+    if existing:
+        return existing[0]
+    out = out_dir / f"{stem}.jsonl"
+    if archived_path.suffix == ".gz":
+        with gzip.open(archived_path, "rb") as src, open(out, "wb") as dst:
+            dst.write(src.read())
+    else:
+        out.write_bytes(archived_path.read_bytes())
+    log.info("restored archived transcript %s -> %s", archived_path, out)
+    return out
+
+
 @app.get("/api/search")
 async def search_endpoint(q: str = Query(min_length=1), limit: int = Query(default=40, ge=1, le=200),
                           role: str | None = None, refresh: int = 0):
@@ -639,9 +667,12 @@ async def create_session(request: Request):
     resume = body.get("resumeFrom")
     if resume:
         rp = Path(resume).expanduser().resolve()
-        # Same root the search index scans (OMPGW_SESSIONS_DIR override keeps
-        # search results and resume validation in agreement).
-        from .search import SESSIONS_DIR as _SEARCH_ROOT
+        # Search hits in the omp archive are resumable too: restore the
+        # (possibly gzipped) transcript into the live sessions dir first.
+        from .search import ARCHIVE_DIR as _ARCHIVE_ROOT, SESSIONS_DIR as _SEARCH_ROOT
+        in_archive = _ARCHIVE_ROOT.resolve() in rp.parents
+        if in_archive:
+            rp = _restore_archived(rp)
         if not rp.is_file() or _SEARCH_ROOT.resolve() not in rp.parents:
             raise HTTPException(422, "resumeFrom must be a saved session file from /api/sessions")
         resume = str(rp)
@@ -696,16 +727,48 @@ async def prompt(gw_id: str, request: Request):
     wait = bool(body.get("wait"))
     sess.touch()
     if mode == "follow_up":
-        data = await sess.command("follow_up", message=message, timeout=30,
-                                  **({"images": images} if images else {}))
-    else:
-        data = await sess.prompt(message, wait=wait, steer=(mode == "steer"),
-                                 timeout=float(body.get("timeout", 600)), images=images)
+        # Gateway-owned queue: omp's queue is count-only (no RPC to list,
+        # edit or cancel), so holding it here is what makes queued messages
+        # editable. Fired head-first when the running turn ends ok.
+        entry = sess.queue_add(message, images)
+        out = sess.info()
+        out["ack"] = {"queued": True, "id": entry["id"]}
+        return out
+    data = await sess.prompt(message, wait=wait, steer=(mode == "steer"),
+                             timeout=float(body.get("timeout", 600)), images=images)
     out = sess.info()
     out["ack"] = data
     if wait:
         out["lastAssistantText"] = await sess.last_assistant_text()
     return out
+
+
+@app.get("/api/sessions/{gw_id}/queue")
+async def queue_list(gw_id: str):
+    return {"queue": get_session_or_404(gw_id).queue_list()}
+
+
+@app.patch("/api/sessions/{gw_id}/queue/{qid}")
+async def queue_edit(gw_id: str, qid: str, request: Request):
+    """Edit a queued follow-up before it fires: {message?, images?}."""
+    sess = get_session_or_404(gw_id)
+    body = await json_body(request)
+    message = body.get("message")
+    if message is not None and (not isinstance(message, str) or not message.strip()):
+        raise HTTPException(422, "message must be a non-empty string")
+    images = parse_images(body["images"]) if "images" in body else _UNSET
+    entry = sess.queue_edit(qid, message=message, images=images)
+    if entry is None:
+        raise HTTPException(404, "no such queued message (already fired or cancelled)")
+    return {"entry": {"id": entry["id"], "message": entry["message"], "ts": entry["ts"],
+                      "images": len(entry["images"] or [])}}
+
+
+@app.delete("/api/sessions/{gw_id}/queue/{qid}")
+async def queue_remove(gw_id: str, qid: str):
+    if not get_session_or_404(gw_id).queue_remove(qid):
+        raise HTTPException(404, "no such queued message (already fired or cancelled)")
+    return {"ok": True}
 
 
 @app.post("/api/sessions/{gw_id}/abort")

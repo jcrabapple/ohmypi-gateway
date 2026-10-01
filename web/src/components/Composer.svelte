@@ -2,7 +2,7 @@
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import type { PromptMode } from '../lib/api/endpoints';
   import { isAbortError } from '../lib/api/client';
-  import { sessionFiles } from '../lib/api/endpoints';
+  import { sessions as api, sessionFiles } from '../lib/api/endpoints';
   import type { FileIndexEntry } from '../lib/api/types';
   import { atDirPrefix, extractAtQuery, insertMention, rankEntries } from '../lib/composer/atQuery';
   import { clearDraft, loadDraft, saveDraft } from '../lib/composer/drafts';
@@ -27,6 +27,43 @@
   let sel = $state(0);
   let el: HTMLTextAreaElement | undefined = $state();
   let fileInput: HTMLInputElement | undefined = $state();
+  // Queued follow-up stack: expand/collapse, inline edit, cancel.
+  let queueOpen = $state(false);
+  let editing = $state<string | null>(null);
+  let editText = $state('');
+  let busy = $state<string | null>(null);
+
+  function startEdit(entry: { id: string; message: string }): void {
+    editing = entry.id;
+    editText = entry.message;
+  }
+
+  async function saveEdit(qid: string): Promise<void> {
+    const text = editText.trim();
+    if (!text || busy) return;
+    busy = qid;
+    try {
+      await api.queueEdit(gwId, qid, text);
+      editing = null;
+    } catch (e) {
+      ui.error(e instanceof Error ? e.message : 'Could not edit the queued message');
+    } finally {
+      busy = null;
+    }
+  }
+
+  async function removeQueued(qid: string): Promise<void> {
+    if (busy) return;
+    busy = qid;
+    try {
+      await api.queueRemove(gwId, qid);
+    } catch (e) {
+      ui.error(e instanceof Error ? e.message : 'Could not cancel the queued message');
+    } finally {
+      busy = null;
+    }
+  }
+
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let nextImage = 1;
   const uid = $props.id();
@@ -466,6 +503,42 @@
     {#if images.length}
       <ImageTray {images} onremove={removeImage} />
     {/if}
+    {#if queueOpen && active.queueList.length > 0}
+      <div class="queue" role="list" aria-label="Queued messages">
+        {#each active.queueList as entry (entry.id)}
+          <div class="queue-row" role="listitem">
+            {#if editing === entry.id}
+              <textarea
+                class="queue-edit"
+                bind:value={editText}
+                rows="2"
+                aria-label="Edit queued message"
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void saveEdit(entry.id); }
+                  if (e.key === 'Escape') editing = null;
+                }}
+              ></textarea>
+              <button type="button" class="btn btn-sm" onclick={() => void saveEdit(entry.id)}>Save</button>
+              <button type="button" class="btn btn-sm btn-ghost" onclick={() => (editing = null)}>Cancel</button>
+            {:else}
+              <span class="queue-text">{entry.message}</span>
+              {#if entry.images > 0}<span class="queue-img">{entry.images} img</span>{/if}
+              <span class="spacer"></span>
+              <button type="button" class="icon-btn" aria-label="Edit queued message" onclick={() => startEdit(entry)}>
+                <Icon name="pencil" size={14} />
+              </button>
+              <button
+                type="button" class="icon-btn" aria-label="Remove from queue"
+                disabled={busy === entry.id}
+                onclick={() => void removeQueued(entry.id)}
+              >
+                <Icon name="x" size={14} />
+              </button>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
     <textarea
       bind:this={el}
       bind:value={text}
@@ -506,8 +579,16 @@
       <div class="chips-scroll" use:scrollFade><ComposerChips /></div>
 
       <div class="right">
-        {#if active.queued > 0}
-          <span class="queued" role="status">{active.queued} queued</span>
+        {#if active.queueList.length > 0}
+          <button
+            type="button"
+            class="queued"
+            aria-expanded={queueOpen}
+            title="Queued messages"
+            onclick={() => (queueOpen = !queueOpen)}
+          >
+            {active.queueList.length} queued
+          </button>
         {/if}
         {#if streaming}
           <button type="button" class="btn btn-sm stop" onclick={stop} aria-label="Stop">
@@ -685,6 +766,46 @@
     color: var(--ink-3);
     font-size: var(--fs-sm);
     white-space: nowrap;
+  }
+  button.queued:hover {
+    color: var(--ink);
+  }
+  .queue {
+    display: grid;
+    gap: var(--s-1);
+    padding: var(--s-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--inset);
+  }
+  .queue-row {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+  }
+  .queue-row .queue-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink-2);
+  }
+  .queue-row .queue-img {
+    flex: none;
+    color: var(--ink-3);
+    font-size: var(--fs-xs);
+  }
+  .queue-row .spacer {
+    flex: 1;
+  }
+  .queue-row .icon-btn {
+    flex: none;
+  }
+  .queue-edit {
+    flex: 1;
+    min-width: 0;
+    resize: vertical;
   }
   .stop {
     color: var(--err);

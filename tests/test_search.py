@@ -35,13 +35,16 @@ class SearchTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="ompgw-search-")
         self.root = Path(self.tmp.name) / "sessions"
         self.root.mkdir()
-        self.orig = (search_mod.SESSIONS_DIR, search_mod.SEARCH_DB, search_mod._last_refresh)
+        self.orig = (search_mod.SESSIONS_DIR, search_mod.SEARCH_DB, search_mod.ARCHIVE_DIR,
+                     search_mod._last_refresh)
         search_mod.SESSIONS_DIR = self.root
         search_mod.SEARCH_DB = Path(self.tmp.name) / "index.db"
+        search_mod.ARCHIVE_DIR = Path(self.tmp.name) / "archive"  # absent unless a test creates it
         search_mod._last_refresh = 0.0
 
     def tearDown(self):
-        search_mod.SESSIONS_DIR, search_mod.SEARCH_DB, search_mod._last_refresh = self.orig
+        (search_mod.SESSIONS_DIR, search_mod.SEARCH_DB,
+         search_mod.ARCHIVE_DIR, search_mod._last_refresh) = self.orig
         self.tmp.cleanup()
 
     # ------------------------------------------------------------- refresh

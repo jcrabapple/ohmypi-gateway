@@ -168,7 +168,8 @@
           title={isLive(group.list[0]) ? 'Open this live session' : 'Resume this session'}
         >
           <span class="name">{label(group.list[0])}</span>
-          {#if isLive(group.list[0])}<span class="live">live</span>{/if}
+          {#if isLive(group.list[0])}<span class="live">live</span>
+          {:else if group.list[0].archived}<span class="archived">archived</span>{/if}
           <span class="meta">{group.list[0].cwd}</span>
           <Icon name="chevron-right" size={14} />
         </button>
@@ -278,6 +279,14 @@
     border-radius: 999px;
     background: var(--accent-soft);
     color: var(--accent);
+  }
+  .head .archived {
+    flex: none;
+    font-size: var(--fs-xs);
+    padding: 1px var(--s-2);
+    border-radius: 999px;
+    background: var(--inset);
+    color: var(--ink-3);
   }
   .head .meta {
     color: var(--ink-3);

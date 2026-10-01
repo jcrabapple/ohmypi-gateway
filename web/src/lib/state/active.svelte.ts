@@ -7,7 +7,7 @@ import { emitSignedOut } from '../api/client';
 import { sessions as api, type PromptImage, type PromptMode } from '../api/endpoints';
 import { SessionStream, type StreamStatus } from '../api/stream';
 import type {
-  ControlEvent, OmpEvent, OmpMessage, SessionInfo, SessionState, SessionStatsData, SlashCommand, ThinkingLevel,
+  ControlEvent, OmpEvent, OmpMessage, QueueEntry, SessionInfo, SessionState, SessionStatsData, SlashCommand, ThinkingLevel,
   UiAnswer, UiRequest, UnknownEvent,
 } from '../api/types';
 import { isBlockingUi } from '../api/types';
@@ -43,6 +43,8 @@ class ActiveSession {
   state = $state.raw<SessionState | null>(null);
   /** Messages omp is holding for after the current turn (from /state). */
   queued = $state(0);
+  /** Gateway-owned follow-up queue (editable until it fires). */
+  queueList = $state<QueueEntry[]>([]);
   /** Set when omp reports a websocket-level error for this session. Cleared on the next send. */
   wsError = $state<string | null>(null);
 
@@ -218,7 +220,8 @@ class ActiveSession {
       const st = await api.state(gwId);
       if (this.gwId === gwId) {
         this.state = st;
-        this.queued = st.queuedMessageCount ?? 0;
+        // The queue is gateway-owned now; omp's own count is always 0.
+        this.queued = this.queueList.length;
         sessionsStore.setTodoActive(gwId, hasActiveTodo(st));
       }
     } catch {
@@ -265,6 +268,8 @@ class ActiveSession {
 
   private setInfo(info: SessionInfo): void {
     this.info = info;
+    this.queueList = info.queue ?? [];
+    this.queued = this.queueList.length;
     sessionsStore.patch(info);
   }
 
@@ -292,7 +297,13 @@ class ActiveSession {
       gwId,
       after,
       onEvent: (event) => {
-        if (gen === this.generation) this.enqueue(event);
+        if (gen !== this.generation) return;
+        // Session-state events bypass the transcript reducer.
+        if ((event as { type?: string }).type === 'queue_changed') {
+          this.queueList = (event as { queue?: QueueEntry[] }).queue ?? [];
+          return;
+        }
+        this.enqueue(event);
       },
       onControl: (frame) => {
         if (gen === this.generation) this.onControl(frame);

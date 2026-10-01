@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import { active, ui } from '../../lib/state';
+import { sessions as sessionsApi } from '../../lib/api/endpoints';
 import { emptyTranscript, lastTurnFailure } from '../../lib/transcript/reducer';
 import type { Item } from '../../lib/transcript/types';
 import Composer from '../Composer.svelte';
@@ -87,10 +88,29 @@ describe('Composer send modes', () => {
     expect(ta.value).toBe('keep me');
   });
 
-  it('shows the queued count', () => {
-    active.queued = 2;
+  it('shows the queued count from the gateway queue', () => {
+    active.queueList = [
+      { id: 'q1', message: 'one', ts: 1, images: 0 },
+      { id: 'q2', message: 'two', ts: 2, images: 0 },
+    ];
     const { target } = render(Composer, { gwId: 'g1' });
     expect(target.textContent).toContain('2 queued');
+  });
+
+  it('expands the queue stack with edit and cancel controls', async () => {
+    active.queueList = [{ id: 'q1', message: 'check the flaky test', ts: 1, images: 0 }];
+    const remove = vi.spyOn(sessionsApi, 'queueRemove').mockResolvedValue({ ok: true });
+    const { target } = render(Composer, { gwId: 'g1' });
+    buttonNamed(target, /1 queued/)!.click();
+    flushSync();
+    await settle();
+    expect(target.textContent).toContain('check the flaky test');
+    const cancel = buttonNamed(target, 'Remove from queue');
+    expect(cancel).toBeTruthy();
+    cancel!.click();
+    flushSync();
+    await settle();
+    expect(remove).toHaveBeenCalledWith('g1', 'q1');
   });
 
   it('a slash command with no argument sends on Enter', async () => {
