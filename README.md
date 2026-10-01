@@ -15,6 +15,7 @@ Client contract: **[docs/API.md](docs/API.md)**. OpenAPI at `/api/openapi.json`.
   numbered event backlog for gap-free reconnects, pending-dialog tracking for
   approvals.
 - `gateway/auth.py`: bearer token, signed session cookie, per-IP lockout.
+- `gateway/push.py`: Web Push ("needs you"): VAPID keys, device subscriptions, dialog pushes. Needs the `pywebpush` package in the venv (`pip install pywebpush`); without it the feature reports unavailable and everything else runs normally.
 - `gateway/main.py`: FastAPI app: REST, per-session WebSocket, dashboard.
 - `static/`: Alpine.js dashboard (vendored, no CDN), installable as a PWA.
 - `tests/e2e.py`: suite run against a live omp; takes a base URL.

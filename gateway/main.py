@@ -49,7 +49,7 @@ from .bridge import (
 )
 from .ledger import DEFAULT_DAYS, close_ledger, get_ledger
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PROJECT_DIR / "static"
 # Built web client. Served when WEB_DIST/index.html exists, else the Alpine dashboard.
@@ -422,6 +422,42 @@ async def catalog_models(refresh: int = 0):
         if _models_cache is not None:
             return _models_cache[1]
         raise
+
+
+@app.get("/api/push/vapid")
+async def push_vapid():
+    """Public VAPID application server key for PushManager.subscribe().
+    503 when the pywebpush dependency is not installed."""
+    from . import push as push_mod
+    if not push_mod.available():
+        raise HTTPException(503, "web push unavailable: pywebpush not installed")
+    return {"publicKey": push_mod.public_key()}
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(request: Request):
+    """Register a device: the browser PushSubscription as
+    `{endpoint, keys: {p256dh, auth}}`. Idempotent per endpoint."""
+    from . import push as push_mod
+    if not push_mod.available():
+        raise HTTPException(503, "web push unavailable: pywebpush not installed")
+    body = await json_body(request)
+    try:
+        count = push_mod.subscribe(body.get("endpoint"), body.get("keys") or {})
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"ok": True, "subscriptions": count}
+
+
+@app.post("/api/push/unsubscribe")
+async def push_unsubscribe(request: Request):
+    """Remove a device by its push service `endpoint`."""
+    from . import push as push_mod
+    body = await json_body(request)
+    endpoint = body.get("endpoint")
+    if not isinstance(endpoint, str) or not endpoint:
+        raise HTTPException(422, "endpoint required")
+    return {"ok": True, "subscriptions": push_mod.unsubscribe(endpoint)}
 
 
 @app.get("/api/skills")

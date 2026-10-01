@@ -47,6 +47,7 @@ export const SETTINGS_ENTRIES: readonly SettingsEntry[] = [
   { id: 'skill-list', page: 'skills', label: 'Installed skills', keywords: 'skill description installed' },
   { id: 'usage-report', page: 'usage', label: 'Usage report', keywords: 'usage limits quota tokens cost provider' },
   { id: 'versions', page: 'connection', label: 'Gateway and omp versions', keywords: 'version uptime gateway omp live sessions system' },
+  { id: 'push', page: 'connection', label: 'Push notifications', keywords: 'push notification needs you approval dialog subscribe device vapid' },
   { id: 'sign-out', page: 'connection', label: 'Sign out', keywords: 'logout log out session cookie' },
   { id: 'keys', page: 'shortcuts', label: 'Keyboard shortcuts', keywords: 'keys hotkeys keyboard bindings' },
 ];

@@ -164,6 +164,8 @@ class OmpSession:
         # blocked on. Tracked so late-joining and REST-only clients can see and
         # answer them. First answer wins.
         self.pending_ui: dict[str, dict] = {}
+        # Dialog ids already web-pushed (one push per dialog, wherever it leaves pending_ui).
+        self._pushed_dialogs: set[str] = set()
 
         self.proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
@@ -323,6 +325,7 @@ class OmpSession:
             self._turn_reset()
         elif ftype == "extension_ui_request" and obj.get("method") in UI_DIALOG_METHODS:
             self.pending_ui[obj["id"]] = obj
+            self._maybe_push_dialog(obj)
         elif ftype == "message_end":
             msg = obj.get("message")
             if isinstance(msg, dict):
@@ -493,10 +496,31 @@ class OmpSession:
 
     # ----------------------------------------------------------------- writes
 
+    def _maybe_push_dialog(self, obj: dict) -> None:
+        """Web Push for "needs you": when a blocking dialog appears and NO
+        WebSocket is subscribed to this session, someone left a turn running
+        unattended. One push per dialog id; cleared wherever the dialog leaves
+        pending_ui. Best effort: never raises, never delays dispatch."""
+        if self.subscribers or str(obj.get("id")) in self._pushed_dialogs:
+            return
+        from . import push as push_mod
+        if not push_mod.available():
+            return
+        self._pushed_dialogs.add(str(obj.get("id")))
+        task = asyncio.get_running_loop().create_task(
+            push_mod.push_dialog(self.gw_id, self.omp_session_name, obj))
+        task.add_done_callback(self._log_push_error)
+
+    @staticmethod
+    def _log_push_error(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            log.warning("push_dialog task failed", exc_info=task.exception())
+
     async def answer_ui(self, request_id: str, response: dict) -> dict:
         """Answer a pending dialog. Raises KeyError if it is not pending
         (already answered by another client, or never existed)."""
         req = self.pending_ui.pop(request_id)
+        self._pushed_dialogs.discard(request_id)
         frame = {"type": "extension_ui_response", "id": request_id}
         for k in ("value", "confirmed", "cancelled"):
             if k in response:
@@ -514,6 +538,7 @@ class OmpSession:
 
     async def _resolve_ui_locally(self, request_id: str, reason: str) -> None:
         if self.pending_ui.pop(request_id, None) is not None:
+            self._pushed_dialogs.discard(request_id)
             await self._publish({"type": "ui_resolved", "id": request_id, "reason": reason})
 
     async def send_raw(self, frame: dict) -> None:

@@ -112,6 +112,24 @@ provider and model are stored per turn.
 | GET | `/ledger?days=&model=&provider=` | aggregates over the last `days` local calendar days (1..365, default 30); `model` accepts the bare model name or `provider/model`, `provider` is exact: `{days, totals: {turns, turnsOk, input, output, cacheRead, cacheWrite, cost}, perDay: [{date, input, output, cost}], perModel: [{provider, model, turns, input, output, cacheRead, cost}]}`. `perDay` is always exactly `days` entries, keyed by ISO date in the gateway's timezone, zero-filled, oldest first, so chart bars sum to the totals. Costs are raw sums of per-turn USD floats; clients round for display |
 | GET | `/ledger/sessions?days=` | per-session rollup (grouped by session name + cwd), newest activity first: `{days, sessions: [{sessionName, cwd, turns, input, output, cacheRead, cost, lastTs}]}` |
 
+### Web push ("needs you")
+
+When a blocking dialog (tool approval, question) becomes pending on a session
+that NO WebSocket client is watching, the gateway pushes every registered
+device. One push per dialog. Pushes require the `pywebpush` package in the
+venv; without it the routes below answer 503 and the rest of the gateway is
+unaffected. VAPID keys are generated on first use and stored at
+`push-vapid.json` (mode 600) next to `auth-token`; device subscriptions at
+`push-subs.json`. Endpoints that answer 404/410 are pruned on the next send.
+The notification deep-links to `/#/s/{gwId}`. iOS only delivers web push to
+the installed PWA.
+
+| Method | Path | |
+|---|---|---|
+| GET | `/push/vapid` | `{publicKey}`: base64url uncompressed P-256 point, passed as `applicationServerKey` to `pushManager.subscribe({userVisibleOnly: true})` |
+| POST | `/push/subscribe` | register a device: `{endpoint, keys: {p256dh, auth}}` (the browser PushSubscription, as JSON). Idempotent per endpoint; `-> {ok, subscriptions}`. Non-https endpoint or missing keys 422 |
+| POST | `/push/unsubscribe` | remove a device: `{endpoint}`; `-> {ok, subscriptions}` |
+
 ### Sessions
 
 A *live* session is a running omp child owned by the gateway. A *saved*
