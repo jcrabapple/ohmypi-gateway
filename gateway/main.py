@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import weakref
+import zlib
 import subprocess
 import time
 from pathlib import Path
@@ -704,7 +705,8 @@ async def create_session(request: Request):
                 raise HTTPException(422, "archived transcript no longer exists")
             try:
                 rp = _restore_archived(rp)
-            except (ValueError, OSError) as e:
+            except (ValueError, OSError, EOFError, zlib.error) as e:
+                # zlib.error/EOFError: corrupt or truncated gzip payload.
                 raise HTTPException(422, str(e))
         if not rp.is_file() or _SEARCH_ROOT.resolve() not in rp.parents:
             raise HTTPException(422, "resumeFrom must be a saved session file from /api/sessions")
