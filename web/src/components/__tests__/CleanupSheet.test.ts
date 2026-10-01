@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import * as endpoints from '../../lib/api/endpoints';
-import { sessionsStore } from '../../lib/state';
+import { pins, sessionsStore } from '../../lib/state';
 import CleanupSheet from '../CleanupSheet.svelte';
 import { buttonNamed, cleanup, render, settle } from './mount';
 import type { SavedSession } from '../../lib/api/types';
@@ -68,5 +68,17 @@ describe('CleanupSheet', () => {
     await settle();
     expect(target.querySelectorAll('.row')).toHaveLength(0);
     expect(target.textContent).toContain('Nothing matches');
+  });
+
+  it('pinned sessions are never offered for cleanup', async () => {
+    pins.files = new Set(['/s/pinned.jsonl']);
+    sessionsStore.saved = [
+      saved({ file: '/s/pinned.jsonl', title: 'pinned one', cwdFolder: 'keep' }),
+      saved({ file: '/s/free.jsonl', title: 'free to delete', cwdFolder: 'keep' }),
+    ];
+    const { target } = render(CleanupSheet, { onclose: () => {} });
+    await settle();
+    expect(target.querySelectorAll('.row')).toHaveLength(1);
+    expect(target.textContent).not.toContain('pinned one');
   });
 });

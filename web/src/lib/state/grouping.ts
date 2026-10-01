@@ -12,6 +12,8 @@ export interface SessionGroups {
   review: SessionInfo[];
   running: SessionInfo[];
   idle: SessionInfo[];
+  /** Saved sessions the user pinned; always rendered above the history. */
+  pinned: SavedSession[];
   history: HistoryGroup[];
 }
 
@@ -51,6 +53,7 @@ export function groupSessions(
   now: number = Date.now(),
   todoActive: ReadonlySet<string> = new Set(),
   needsReview: ReadonlySet<string> = new Set(),
+  pinned: ReadonlySet<string> = new Set(),
 ): SessionGroups {
   const needsYou: SessionInfo[] = [];
   const review: SessionInfo[] = [];
@@ -66,10 +69,16 @@ export function groupSessions(
     else idle.push(s);
   }
 
+  const pinnedItems: SavedSession[] = [];
   const buckets = new Map<HistoryGroup['key'], SavedSession[]>();
   const sorted = [...saved].sort((a, b) => b.mtime - a.mtime);
   for (const s of sorted) {
     if (s.running || liveFiles.has(s.file)) continue;
+    // Pinned sessions leave the normal history buckets entirely.
+    if (pinned.has(s.file)) {
+      pinnedItems.push(s);
+      continue;
+    }
     const key = historyBucket(s.mtime, now);
     const list = buckets.get(key) ?? [];
     list.push(s);
@@ -80,5 +89,5 @@ export function groupSessions(
     const items = buckets.get(key);
     if (items?.length) history.push({ key, label: LABELS[key], items });
   }
-  return { needsYou, review, running, idle, history };
+  return { needsYou, review, running, idle, pinned: pinnedItems, history };
 }

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { shortcutText } from '../lib/keymap';
   import { openOverlay, openSettings } from '../lib/overlays';
+  import type { SavedSession } from '../lib/api/types';
+  import { pins } from '../lib/state';
   import { basename, relativeTime, savedFolderLabel, savedTitle, sessionTitle, uniqueCwds } from '../lib/format';
   import { active, auth, nav, reviewed, sessionsStore, ui } from '../lib/state';
   import { confirm, Icon, Kbd, type MenuItem } from '../lib/ui';
@@ -36,6 +38,16 @@
       return [{ id: 'unpin', label: 'Unpin', icon: 'x', onselect: () => reviewed.unflag(s.gwId) }];
     }
     return [{ id: 'review', label: 'Mark ready for review', icon: 'flag', onselect: () => reviewed.flag(s.gwId) }];
+  }
+
+  function savedMenu(s: SavedSession): MenuItem[] {
+    const isPinned = pins.isPinned(s.file);
+    return [{
+      id: isPinned ? 'unpin-session' : 'pin-session',
+      label: isPinned ? 'Unpin from list' : 'Pin to top of list',
+      icon: isPinned ? 'x' : 'pin',
+      onselect: () => pins.toggle(s.file),
+    }];
   }
 
   function liveSub(s: SessionInfo): string {
@@ -114,6 +126,22 @@
         {/if}
       {/each}
 
+      {#if groups.pinned.length}
+        <section aria-labelledby="rail-pinned">
+          <h2 id="rail-pinned" class="eyebrow"><span>Pinned</span><span class="count">{groups.pinned.length}</span></h2>
+          {#each groups.pinned as s (s.file)}
+            <RailRow
+              title={savedTitle(s, liveCwds)}
+              sub="{savedFolderLabel(s, liveCwds)} · {relativeTime(s.mtime * 1000, now)}"
+              busy={nav.resuming === s.file}
+              pinned
+              menu={savedMenu(s)}
+              onclick={() => nav.resume(s)}
+            />
+          {/each}
+        </section>
+      {/if}
+
       {#each groups.history as h (h.key)}
         <section aria-labelledby="rail-{h.key}">
           <h2 id="rail-{h.key}" class="eyebrow"><span>{h.label}</span><span class="count">{h.items.length}</span></h2>
@@ -122,6 +150,7 @@
               title={savedTitle(s, liveCwds)}
               sub="{savedFolderLabel(s, liveCwds)} · {relativeTime(s.mtime * 1000, now)}"
               busy={nav.resuming === s.file}
+              menu={savedMenu(s)}
               onclick={() => nav.resume(s)}
             />
           {/each}

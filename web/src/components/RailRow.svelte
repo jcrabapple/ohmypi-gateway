@@ -13,12 +13,14 @@
     badge?: number;
     /** Session was created by fork: a small branch mark beside the title. */
     forked?: boolean;
+    /** Saved session pinned to the top: a small pin mark beside the title. */
+    pinned?: boolean;
     /** Overflow actions; the kebab button renders only when this is non-empty. */
     menu?: MenuItem[];
     onclick: () => void;
   };
 
-  let { title, sub, status, active = false, busy = false, badge = 0, forked = false, menu, onclick }: Props = $props();
+  let { title, sub, status, active = false, busy = false, badge = 0, forked = false, pinned = false, menu, onclick }: Props = $props();
 
   let menuOpen = $state(false);
   let menuBtn: HTMLButtonElement | undefined = $state();
@@ -35,6 +37,7 @@
     </span>
     <span class="text">
       <span class="title truncate">
+        {#if pinned}<span class="pinned-mark" title="Pinned"><Icon name="pin" size={12} /></span>{/if}
         {#if forked}<span class="fork" title="Forked from another session"><Icon name="fork" size={12} /></span>{/if}
         <InlineCode text={title} />
       </span>
@@ -114,6 +117,12 @@
     vertical-align: -1px;
     margin-right: var(--s-1);
     color: var(--ink-3);
+  }
+  .pinned-mark {
+    display: inline-flex;
+    vertical-align: -1px;
+    margin-right: var(--s-1);
+    color: var(--accent);
   }
   .sub {
     color: var(--ink-3);

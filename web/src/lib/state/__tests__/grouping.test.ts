@@ -124,3 +124,20 @@ describe('groupSessions', () => {
     expect(historyBucket(sec(new Date(2026, 8, 21, 23, 59, 59)), NOW)).toBe('older');
   });
 });
+
+describe('pinned sessions', () => {
+  it('lifts pinned saved sessions into their own group above the history', () => {
+    const old = saved('/s/old.jsonl', sec(new Date(2026, 7, 1)));
+    const pinned = saved('/s/pin.jsonl', sec(new Date(2026, 7, 15)));
+    const g = groupSessions([], [old, pinned], NOW, new Set(), new Set(), new Set(['/s/pin.jsonl']));
+    expect(g.pinned.map((s) => s.file)).toEqual(['/s/pin.jsonl']);
+    // the pinned file is gone from the normal history buckets
+    expect(g.history.flatMap((h) => h.items.map((s) => s.file))).toEqual(['/s/old.jsonl']);
+  });
+
+  it('unpinned sessions keep the normal buckets', () => {
+    const g = groupSessions([], [saved('/s/a.jsonl', sec(new Date(2026, 8, 29)))], NOW);
+    expect(g.pinned).toEqual([]);
+    expect(g.history[0]?.items.map((s) => s.file)).toEqual(['/s/a.jsonl']);
+  });
+});

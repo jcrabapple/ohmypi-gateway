@@ -5,6 +5,7 @@ export { modelCatalog } from './models.svelte';
 export { nav } from './nav.svelte';
 export { plan } from './plan.svelte';
 export { reviewed } from './reviewed.svelte';
+export { pins } from './pins.svelte';
 export { sessionsStore } from './sessions.svelte';
 export { settings } from './settings.svelte';
 export { subagents } from './subagents.svelte';

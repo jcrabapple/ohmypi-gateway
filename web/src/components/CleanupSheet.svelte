@@ -4,7 +4,7 @@
   import { onMount } from 'svelte';
   import { sessions as api } from '../lib/api/endpoints';
   import { basename } from '../lib/format';
-  import { sessionsStore } from '../lib/state';
+  import { pins, sessionsStore } from '../lib/state';
   import { Icon, Sheet, toast } from '../lib/ui';
   import type { OverlayProps } from '../lib/overlays';
   import type { SavedSession } from '../lib/api/types';
@@ -33,6 +33,8 @@
     const cutoff = olderThan === 'any' ? 0 : Date.now() - olderThan * 86400_000;
     return saved.filter((s) => {
       if (s.running) return false;
+      // Pinned sessions are never offered for cleanup.
+      if (pins.protectedFromCleanup(s.file)) return false;
       if (cutoff && s.mtime * 1000 > cutoff) return false;
       if (f && !(s.title.toLowerCase().includes(f) || s.cwd?.toLowerCase().includes(f) || s.cwdFolder.toLowerCase().includes(f))) return false;
       return true;
