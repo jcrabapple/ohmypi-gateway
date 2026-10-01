@@ -144,8 +144,9 @@ are not indexed). The FTS5 index lives at `search-index.db` next to
 
 Every query word is a prefix match; raw FTS5 syntax from the client is
 stripped, so it can neither error the query nor widen it. Results are ranked
-by relevance and carry `<mark>` highlights around matches (escape the snippet
-before rendering, then turn the markers into elements).
+by relevance. Snippet matches are wrapped in private-use-area delimiters
+(U+E000 / U+E001) that cannot collide with transcript content: escape the
+snippet as plain text, then map the sentinels to `<mark>` elements.
 
 | Method | Path | |
 |---|---|---|

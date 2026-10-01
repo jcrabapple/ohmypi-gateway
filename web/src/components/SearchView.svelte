@@ -42,6 +42,7 @@
 
   async function run(query: string): Promise<void> {
     if (ctrl) ctrl.abort();
+    loading = true;
     // Local reference: the component-level ctrl is replaced by the next run,
     // so this request's catch/finally must inspect its OWN controller.
     const cur = new AbortController();
@@ -58,15 +59,22 @@
       if (cur.signal.aborted) return;
       error = e instanceof Error ? e.message : 'Search failed';
     } finally {
-      if (ctrl === cur) loading = false;
+      // A superseded (aborted) request must not clear loading: the run that
+      // replaced it owns the indicator now.
+      if (ctrl === cur && !cur.signal.aborted) loading = false;
     }
   }
 
   function setRole(next: Role): void {
     if (role === next) return;
     role = next;
-    // Role chips are deliberate clicks: re-run immediately instead of
-    // waiting out the keystroke debounce.
+    // Role chips are deliberate clicks: kill any pending keystroke debounce
+    // (it would fire a duplicate request that aborts this one) and re-run
+    // immediately.
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
     const query = q.trim();
     if (query) void run(query);
     else lastQuery = '';

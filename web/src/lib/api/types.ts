@@ -567,7 +567,8 @@ export interface SearchHit {
   line: number;
   role: 'user' | 'assistant';
   ts: string;
-  /** Text with <mark>…</mark> around matches; escape before rendering. */
+  /** Text with private-use-area sentinels (U+E000/U+E001) around matches;
+      escape the whole snippet as text, then map sentinels to elements. */
   snippet: string;
   sessionId: string | null;
   cwd: string | null;
