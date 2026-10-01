@@ -180,11 +180,11 @@ def refresh(root: Path | None = None) -> dict:
                     except OSError:
                         continue
                     on_disk[str(p.resolve())] = (st.st_mtime, st.st_size, archived)
-            known = {r["path"]: (r["mtime"], r["size"])
-                     for r in con.execute("SELECT path, mtime, size FROM files")}
+            known = {r["path"]: (r["mtime"], r["size"], r["archived"])
+                     for r in con.execute("SELECT path, mtime, size, archived FROM files")}
             added = updated = removed = 0
             for path, (mtime, size, archived) in on_disk.items():
-                if known.get(path) == (mtime, size):
+                if known.get(path) == (mtime, size, archived):
                     continue
                 rows, meta = _parse_file(Path(path))
                 if not meta:

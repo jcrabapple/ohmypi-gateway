@@ -122,7 +122,11 @@ class ActiveSession {
     if (!gwId) return false;
     const localId = `local-${++localCounter}`;
     this.wsError = null;
-    this.dispatch({ kind: 'local-send', localId, text, mode, images });
+    // A queued follow-up lives in the gateway queue stack, not the transcript:
+    // it only becomes a message when the queue fires it and omp echoes it.
+    if (mode !== 'follow_up') {
+      this.dispatch({ kind: 'local-send', localId, text, mode, images });
+    }
     try {
       const info = await api.prompt(gwId, text, mode, images);
       // The review pin is keyed to the session the prompt went to, and its

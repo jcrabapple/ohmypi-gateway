@@ -182,6 +182,12 @@ class OmpSession:
         self.queue: list[dict] = []
         self._queue_task: asyncio.Task | None = None
         self._queue_seq = 0
+        # Base delay for queue re-fire retries (tests shrink it).
+        self.QUEUE_RETRY_BASE_S = 2.0
+        # True from prompt-ack until prompt_result: closes the window between
+        # the ack and omp's agent_start where streaming is still False (a
+        # queue_add in that window would otherwise double-fire).
+        self._turn_in_flight = False
 
         self.proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
@@ -357,6 +363,7 @@ class OmpSession:
                 await self._ledger_flush()
             # A successful turn end is when a queued follow-up fires. Aborted
             # or failed turns keep the queue (the user can cancel or retry).
+            self._turn_in_flight = False
             if obj.get("status") not in _TURN_FAILURE_STATUSES:
                 self._maybe_fire_queue()
         elif ftype == "agent_end":
@@ -587,25 +594,44 @@ class OmpSession:
         """Fire the queue head after a successful turn (called at prompt_result
         ok and after queue_add while idle). Never awaits inline: the reader
         loop dispatches this."""
-        if self.streaming or not self.queue or self._queue_task is not None:
+        if self._turn_in_flight or self.streaming or not self.queue or self._queue_task is not None:
             return
         self._queue_task = asyncio.get_running_loop().create_task(self._fire_queue_head())
 
     async def _fire_queue_head(self) -> None:
-        entry = self.queue.pop(0)
-        self._publish_queue()
+        # Peek, not pop: a cancellation mid-submit must not lose the entry.
+        # The queue can also empty between scheduling and running (a cancel
+        # landing in that gap), so re-check.
+        if not self.queue:
+            return
+        entry = self.queue[0]
         try:
             # wait=False: ack is enough; the fired prompt runs as its own turn
             # and its prompt_result triggers the next head.
             await self.prompt(entry["message"], wait=False, steer=False,
                               images=entry.get("images"))
-        except (RpcError, ProcessDead) as e:
-            # Put it back at the head: a session_busy ack means omp was still
-            # finishing, and the next turn end retries; a dead child keeps the
-            # queue for the resume.
-            self.queue.insert(0, entry)
+        except asyncio.CancelledError:
             self._publish_queue()
+            raise
+        except RpcError as e:
+            # omp refused (session_busy while it was still finishing): nothing
+            # will emit the next prompt_result, so retry on a timer. Bounded:
+            # after several failures leave it queued and stop auto-retrying
+            # (the user can still see and edit it in the queue stack).
+            entry["retries"] = entry.get("retries", 0) + 1
+            if entry["retries"] <= 5:
+                delay = self.QUEUE_RETRY_BASE_S * entry["retries"]
+                asyncio.get_running_loop().call_later(delay, self._maybe_fire_queue)
+                log.warning("[%s] queue head refused (%s); retry %d in %.1fs",
+                            self.gw_id, e, entry["retries"], delay)
+            else:
+                log.warning("[%s] queue head refused %d times; leaving queued", self.gw_id, entry["retries"])
+        except ProcessDead as e:
+            # A dead child keeps the queue for the resume; nothing to retry.
             log.warning("[%s] queue head not fired (%s); kept queued", self.gw_id, e)
+        else:
+            self.queue.pop(0)
+            self._publish_queue()
         finally:
             self._queue_task = None
 
@@ -692,6 +718,10 @@ class OmpSession:
                      timeout: float = 600.0, images: list[dict] | None = None) -> dict:
         """Send a prompt. wait=True resolves when the agent turn ends."""
         cmd = "steer" if steer else "prompt"
+        # Mark the ack->agent_start window busy so queue decisions (and
+        # is_busy) see the incoming turn before omp's agent_start arrives.
+        if not steer:
+            self._turn_in_flight = True
         extra = {"images": images} if images else {}
         # late_errors: a same-id error response can arrive after the ack (omp
         # accepts the prompt, then fails to start the turn). Without this the
@@ -773,7 +803,7 @@ class OmpSession:
 
     def is_busy(self) -> bool:
         st = self.last_state or {}
-        return self.streaming or bool(st.get("isCompacting"))
+        return self.streaming or self._turn_in_flight or bool(st.get("isCompacting"))
 
     def subscribe(self, after_seq: int = 0) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=5000)
@@ -800,6 +830,7 @@ class OmpSession:
         # row instead of dropping it. If agent_end never ran (crash mid-turn)
         # the partial accumulator is real usage but the turn did not complete,
         # so it is recorded as a failure, never a silent ok.
+        self._turn_in_flight = False
         if not self._turn_flushed and self._turn_acc is not None:
             if self._turn_flush_timer is None:  # agent_end never ran
                 self._turn_failed = True

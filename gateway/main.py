@@ -463,10 +463,10 @@ async def push_unsubscribe(request: Request):
 
 def _restore_archived(archived_path: Path) -> Path:
     """Copy a gzipped (or plain) archived transcript into the live sessions
-    dir so it becomes a normal resumable file. Idempotent-ish: a restore of
-    the same archive reuses the first restore's path when still present."""
+    dir so it becomes a normal resumable file. Exact-name reuse: a second
+    resume of the same archive returns the first restore's file."""
     import gzip
-    from .search import ARCHIVE_DIR, SESSIONS_DIR
+    from .search import SESSIONS_DIR
 
     out_dir = SESSIONS_DIR / "restored"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -475,15 +475,21 @@ def _restore_archived(archived_path: Path) -> Path:
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
             break
-    existing = sorted(out_dir.glob(f"{stem}*.jsonl"))
-    if existing:
-        return existing[0]
     out = out_dir / f"{stem}.jsonl"
-    if archived_path.suffix == ".gz":
-        with gzip.open(archived_path, "rb") as src, open(out, "wb") as dst:
-            dst.write(src.read())
-    else:
-        out.write_bytes(archived_path.read_bytes())
+    if out.is_file():
+        return out
+    # Copy in chunks with a ceiling: a crafted gzip bomb must not exhaust memory.
+    max_bytes = 100 * 1024 * 1024
+    total = 0
+    opener = gzip.open if archived_path.suffix == ".gz" else open
+    with opener(archived_path, "rb") as src, open(out, "wb") as dst:
+        while chunk := src.read(65536):
+            total += len(chunk)
+            if total > max_bytes:
+                dst.close()
+                out.unlink(missing_ok=True)
+                raise ValueError("archived transcript exceeds the 100 MB restore limit")
+            dst.write(chunk)
     log.info("restored archived transcript %s -> %s", archived_path, out)
     return out
 
@@ -506,13 +512,28 @@ async def search_endpoint(q: str = Query(min_length=1), limit: int = Query(defau
     out = await asyncio.to_thread(run)
     await get_manager().reap_dead()
     live_by_file: dict[str, str] = {}
+    restored_by_stem: dict[str, str] = {}
+    restored_dir = (Path(os.environ.get("OMPGW_SESSIONS_DIR") or str(Path.home() / ".omp" / "agent" / "sessions")) / "restored").resolve()
     for sess in get_manager().sessions.values():
         # exited children are still registered until reaped: they are not live
-        if not sess.exited and sess.omp_session_file:
-            # omp emits resolved paths (/var/home on Aurora); compare resolved.
-            live_by_file[str(Path(sess.omp_session_file).resolve())] = sess.gw_id
+        if sess.exited or not sess.omp_session_file:
+            continue
+        resolved = str(Path(sess.omp_session_file).resolve())
+        live_by_file[resolved] = sess.gw_id
+        # A restored archive transcript that is running live: search hits for
+        # the archived original should open THIS session, not spawn a dupe.
+        if Path(resolved).parent == restored_dir:
+            restored_by_stem[Path(resolved).name.removesuffix(".jsonl")] = sess.gw_id
     for r in out["results"]:
-        r["gwId"] = live_by_file.get(str(Path(r["path"]).resolve()))
+        gw = live_by_file.get(str(Path(r["path"]).resolve()))
+        if gw is None and r.get("archived"):
+            stem = Path(r["path"]).name
+            for suffix in (".jsonl.gz", ".gz", ".jsonl"):
+                if stem.endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+            gw = restored_by_stem.get(stem)
+        r["gwId"] = gw
     out["indexed"] = await asyncio.to_thread(smod.index_stats)
     return out
 
@@ -672,7 +693,12 @@ async def create_session(request: Request):
         from .search import ARCHIVE_DIR as _ARCHIVE_ROOT, SESSIONS_DIR as _SEARCH_ROOT
         in_archive = _ARCHIVE_ROOT.resolve() in rp.parents
         if in_archive:
-            rp = _restore_archived(rp)
+            if not rp.is_file():
+                raise HTTPException(422, "archived transcript no longer exists")
+            try:
+                rp = _restore_archived(rp)
+            except ValueError as e:
+                raise HTTPException(422, str(e))
         if not rp.is_file() or _SEARCH_ROOT.resolve() not in rp.parents:
             raise HTTPException(422, "resumeFrom must be a saved session file from /api/sessions")
         resume = str(rp)

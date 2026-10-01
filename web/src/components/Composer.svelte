@@ -64,6 +64,14 @@
     }
   }
 
+  // If the entry being edited fires or is cancelled elsewhere, drop the edit
+  // form instead of leaving it stranded.
+  $effect(() => {
+    if (editing && !active.queueList.some((e) => e.id === editing)) {
+      editing = null;
+    }
+  });
+
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let nextImage = 1;
   const uid = $props.id();
@@ -505,38 +513,38 @@
     {/if}
     {#if queueOpen && active.queueList.length > 0}
       <div class="queue" role="list" aria-label="Queued messages">
-        {#each active.queueList as entry (entry.id)}
-          <div class="queue-row" role="listitem">
-            {#if editing === entry.id}
-              <textarea
-                class="queue-edit"
-                bind:value={editText}
-                rows="2"
-                aria-label="Edit queued message"
-                onkeydown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void saveEdit(entry.id); }
-                  if (e.key === 'Escape') editing = null;
-                }}
-              ></textarea>
-              <button type="button" class="btn btn-sm" onclick={() => void saveEdit(entry.id)}>Save</button>
-              <button type="button" class="btn btn-sm btn-ghost" onclick={() => (editing = null)}>Cancel</button>
-            {:else}
-              <span class="queue-text">{entry.message}</span>
-              {#if entry.images > 0}<span class="queue-img">{entry.images} img</span>{/if}
-              <span class="spacer"></span>
-              <button type="button" class="icon-btn" aria-label="Edit queued message" onclick={() => startEdit(entry)}>
-                <Icon name="pencil" size={14} />
-              </button>
-              <button
-                type="button" class="icon-btn" aria-label="Remove from queue"
-                disabled={busy === entry.id}
-                onclick={() => void removeQueued(entry.id)}
-              >
-                <Icon name="x" size={14} />
-              </button>
-            {/if}
-          </div>
-        {/each}
+      {#each active.queueList as entry (entry.id)}
+        <div class="queue-row" role="listitem">
+          {#if editing === entry.id}
+            <textarea
+              class="queue-edit"
+              bind:value={editText}
+              rows="2"
+              aria-label="Edit queued message"
+              onkeydown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void saveEdit(entry.id); }
+                if (e.key === 'Escape') editing = null;
+              }}
+            ></textarea>
+            <button type="button" class="btn btn-sm" disabled={busy === entry.id || !editText.trim()} onclick={() => void saveEdit(entry.id)}>Save</button>
+            <button type="button" class="btn btn-sm btn-ghost" onclick={() => (editing = null)}>Cancel</button>
+          {:else}
+            <span class="queue-text">{entry.message}</span>
+            {#if entry.images > 0}<span class="queue-img">{entry.images} img</span>{/if}
+            <span class="spacer"></span>
+            <button type="button" class="icon-btn" aria-label="Edit queued message" onclick={() => startEdit(entry)}>
+              <Icon name="pencil" size={14} />
+            </button>
+            <button
+              type="button" class="icon-btn" aria-label="Remove from queue"
+              disabled={busy === entry.id}
+              onclick={() => void removeQueued(entry.id)}
+            >
+              <Icon name="x" size={14} />
+            </button>
+          {/if}
+        </div>
+      {/each}
       </div>
     {/if}
     <textarea
