@@ -358,20 +358,20 @@ describe('steer lifecycle', () => {
 });
 
 describe('slash commands', () => {
-  it('turns command output into command items with ANSI intact', () => {
+  it('turns command output into one command card with ANSI intact (chunks append, no duplicate cards)', () => {
     const s = play(slash);
     const cmds = s.items.filter((i) => i.kind === 'command');
-    expect(cmds).toHaveLength(2);
+    expect(cmds).toHaveLength(1);
     expect(cmds[0]).toMatchObject({ kind: 'command', command: undefined });
     expect((cmds[0] as { text: string }).text).toContain('Context window');
     expect((cmds[0] as { text: string }).text).toContain('\x1b[');
-    expect((cmds[1] as { text: string }).text).toMatch(/^Usage/);
+    expect((cmds[0] as { text: string }).text).toMatch(/^[\s\S]*Usage/);
   });
 
   it('renders the skill prompt without a user echo, before the assistant reply', () => {
     const s = play(slash);
-    expect(s.items.map((i) => i.kind)).toEqual(['command', 'command', 'skill', 'thinking', 'assistant']);
-    expect(s.items[2]).toMatchObject({ kind: 'skill', name: 'humanizer' });
+    expect(s.items.map((i) => i.kind)).toEqual(['command', 'skill', 'thinking', 'assistant']);
+    expect(s.items[1]).toMatchObject({ kind: 'skill', name: 'humanizer' });
     expect(s.items.some((i) => i.kind === 'user')).toBe(false);
   });
 
@@ -716,5 +716,29 @@ describe('local-retry', () => {
     expect(resynced.retried).toBe(true);
     const started = reduce(retried, { kind: 'event', event: { type: 'agent_start' } as OmpEvent });
     expect(started.retried).toBe(false);
+  });
+});
+
+describe('command_output chunking', () => {
+  it('appends later chunks to the same command card', () => {
+    let s = reduce(emptyTranscript(), { kind: 'local-send', localId: '1', text: '/context', mode: 'prompt' });
+    s = reduce(s, ev({ type: 'command_output', text: 'Context window: 10' }));
+    s = reduce(s, ev({ type: 'command_output', text: '... more stats' }));
+    s = reduce(s, ev({ type: 'command_output', text: '... even more' }));
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({ kind: 'command', command: '/context', id: 'local:1' });
+    expect((s.items[0] as { text: string }).text).toBe('Context window: 10... more stats... even more');
+  });
+
+  it('starts a fresh card for output after a new user message', () => {
+    let s = reduce(emptyTranscript(), { kind: 'local-send', localId: '1', text: '/context', mode: 'prompt' });
+    s = reduce(s, ev({ type: 'command_output', text: 'first' }));
+    s = reduce(s, { kind: 'local-send', localId: '2', text: 'plain question', mode: 'prompt' } as TranscriptInput);
+    // settle the user bubble echo so it is no longer pending
+    s = reduce(s, ev({ type: 'message_start', message: { role: 'user', content: 'plain question' } }));
+    s = reduce(s, ev({ type: 'command_output', text: 'late output' }));
+    const commands = s.items.filter((i) => i.kind === 'command');
+    expect(commands).toHaveLength(2);
+    expect(commands[1]).toMatchObject({ text: 'late output' });
   });
 });

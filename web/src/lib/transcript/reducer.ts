@@ -484,6 +484,8 @@ function fromHistory(prev: TranscriptState, messages: readonly OmpMessage[], str
   };
   messages.forEach((m, i) => applyMessage(d, m, { live: false }, { ending: true, fallback: `h${i}` }));
   if (!streaming) interrupt(d);
+  // retried deliberately SURVIVES a resync (pinned by test): an accepted retry
+  // only hides the chip; omp's next agent_start owns the transcript and clears it.
 
   // Keep local sends the server has not echoed yet. Text match against recent user messages.
   const recent = d.items.filter((it): it is UserItem => it.kind === 'user').slice(-5);
@@ -623,17 +625,32 @@ function onEvent(state: TranscriptState, event: OmpEvent | UnknownEvent, at: num
     case 'command_output': {
       const ev = event as Ev<'command_output'>;
       const d = open(state);
+      const text = ev.text ?? '';
+      // omp streams command output in chunks: extend the existing card instead
+      // of pushing one card per chunk. The card belongs to this command while
+      // no new user bubble has been sent after it.
       const i = d.items.findIndex((it) => it.kind === 'user' && it.pending && it.text.trim().startsWith('/'));
-      const typed = i >= 0 ? (d.items[i] as UserItem) : undefined;
-      const item: CommandItem = {
-        kind: 'command',
-        id: typed ? typed.id : nextId(d, 'c'),
-        command: typed?.text.trim(),
-        text: ev.text ?? '',
-        raw: ev,
-      };
-      if (i >= 0) d.items[i] = item;
-      else d.items.push(item);
+      if (i >= 0) {
+        const typed = d.items[i] as UserItem;
+        const item: CommandItem = {
+          kind: 'command',
+          id: typed.id,
+          command: typed.text.trim(),
+          text,
+          raw: ev,
+        };
+        d.items[i] = item;
+        return d;
+      }
+      for (let j = d.items.length - 1; j >= 0; j--) {
+        const it = d.items[j]!;
+        if (it.kind === 'user') break; // a newer prompt: this output starts a fresh card
+        if (it.kind === 'command') {
+          d.items[j] = { ...it, text: it.text + text };
+          return d;
+        }
+      }
+      d.items.push({ kind: 'command', id: nextId(d, 'c'), command: undefined, text, raw: ev });
       return d;
     }
     case 'auto_compaction_start': {

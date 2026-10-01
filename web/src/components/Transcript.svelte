@@ -20,6 +20,7 @@
   let scroller: HTMLDivElement | undefined = $state();
   let inner: HTMLDivElement | undefined = $state();
   let following = $state(true);
+  let programmatic = 0; // scroll events from our own animation, not the user
 
   const items = $derived(active.transcript.items);
   const blocks = $derived(toBlocks(items));
@@ -39,11 +40,25 @@
   }
 
   function onscroll() {
+    // Intermediate events of our own smooth scroll must not disengage follow:
+    // mid-animation the viewport is still >FOLLOW_PX from the bottom, which
+    // used to flip `following` off and blink the pill back in.
+    if (programmatic > 0) {
+      if (distanceFromBottom() <= FOLLOW_PX) programmatic = 0; // arrived
+      return;
+    }
     following = distanceFromBottom() <= FOLLOW_PX;
+  }
+
+  // A user gesture takes over immediately, even mid-animation.
+  function userScroll() {
+    programmatic = 0;
+    onscroll();
   }
 
   async function jump() {
     following = true;
+    programmatic = 1;
     await tick();
     toBottom(true);
   }
@@ -109,7 +124,8 @@
       </div>
     </div>
   {:else}
-    <div class="scroller scroll-y" bind:this={scroller} {onscroll}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="scroller scroll-y" bind:this={scroller} {onscroll} onwheel={userScroll} ontouchstart={userScroll}>
       <div class="inner" bind:this={inner}>
         {#if lead}
           <div class="lead">{@render lead()}</div>

@@ -126,10 +126,12 @@ class ActiveSession {
       if (this.gwId === gwId) {
         this.setInfo(info);
         if (mode !== 'prompt') void this.refreshQueued();
+        // The user is working in here again: the review pin only makes sense on a settled session.
+        // Cleared after the gateway accepts the prompt, so a failed send keeps the pin.
+        // Guarded like every other post-await write: a send that resolved after the
+        // user switched sessions must not mutate the other session's rail group.
+        reviewed.unflag(gwId);
       }
-      // The user is working in here again: the review pin only makes sense on a settled session.
-      // Cleared after the gateway accepts the prompt, so a failed send keeps the pin.
-      reviewed.unflag(gwId);
       return true;
     } catch (e) {
       if (this.gwId === gwId) {

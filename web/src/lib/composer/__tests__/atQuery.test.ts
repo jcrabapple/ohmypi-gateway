@@ -29,6 +29,13 @@ describe('extractAtQuery', () => {
     expect(extractAtQuery('')).toBeNull();
   });
 
+  it('opens after a path mention, e.g. @src/@"', () => {
+    expect(extractAtQuery('@src/@"')).toEqual({ start: 5, query: '', quoted: true });
+    expect(extractAtQuery('fix @src/lib/@"hand')).toEqual({ start: 13, query: 'hand', quoted: true });
+    // other punctuation is still a mid-word @
+    expect(extractAtQuery('a)@"b')).toBeNull();
+  });
+
   it('ignores a trigger that already ended before the caret', () => {
     expect(extractAtQuery('see @src done')).toBeNull();
   });
