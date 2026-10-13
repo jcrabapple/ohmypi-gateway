@@ -5,6 +5,7 @@ import { device } from '../platform/storage';
 import { cacheKey, idbGet, idbSet } from '../platform/idb';
 import { active } from './active.svelte';
 import { groupSessions } from './grouping';
+import { folderFilter } from './folders.svelte';
 import { pins } from './pins.svelte';
 import { reviewed } from './reviewed.svelte';
 
@@ -39,7 +40,9 @@ class SessionsStore {
   forked = $state<Record<string, string>>(loadForked());
   /** Last time each session's /state confirmed its todo state; entries go stale without refreshes. */
   private lastTodoRefresh = new Map<string, number>();
-  groups = $derived(groupSessions(this.live, this.saved, Date.now(), this.todoActive, reviewed.needsReview, pins.files));
+  groups = $derived(
+    groupSessions(this.live, this.saved, Date.now(), this.todoActive, reviewed.needsReview, pins.files, folderFilter.hidden),
+  );
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private inflight: AbortController | null = null;

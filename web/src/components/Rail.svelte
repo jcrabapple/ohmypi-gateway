@@ -4,8 +4,9 @@
   import type { SavedSession } from '../lib/api/types';
   import { pins } from '../lib/state';
   import { basename, relativeTime, savedFolderLabel, savedTitle, sessionTitle, uniqueCwds } from '../lib/format';
-  import { active, auth, nav, reviewed, sessionsStore, ui } from '../lib/state';
-  import { confirm, Icon, Kbd, type MenuItem } from '../lib/ui';
+  import { active, auth, folderFilter, nav, reviewed, sessionsStore, ui } from '../lib/state';
+  import { folderCounts } from '../lib/state/folders.svelte';
+  import { confirm, Icon, Kbd, Menu, type MenuItem } from '../lib/ui';
   import type { SessionInfo } from '../lib/api/types';
   import ConnectionDot from './ConnectionDot.svelte';
   import RailRow from './RailRow.svelte';
@@ -16,8 +17,35 @@
   const empty = $derived(
     sessionsStore.loaded &&
       !groups.needsYou.length && !groups.review.length && !groups.running.length && !groups.idle.length &&
-      !groups.pinned.length && !groups.history.length,
+      !groups.pinned.length && !groups.history.length && !groups.hiddenCount,
   );
+
+  // ---- folder filter: hide whole folders of saved transcripts (scheduler runs, /tmp probes)
+  const folders = $derived(folderCounts(sessionsStore.saved));
+  const hiddenOn = $derived(folderFilter.hidden.size > 0);
+  let filterOpen = $state(false);
+  let filterBtn: HTMLButtonElement | undefined = $state();
+
+  function folderLabel(key: string): string {
+    return key.startsWith('/') ? basename(key) || '/' : key.replace(/^-+/, '') || key;
+  }
+
+  const filterItems = $derived.by((): MenuItem[] => {
+    const labels = folders.map((f) => folderLabel(f.key));
+    const items: MenuItem[] = folders.map((f, i) => {
+      // Two folders with one basename (~/tmp and /tmp) fall back to the full path.
+      const label = labels.indexOf(labels[i]!) !== labels.lastIndexOf(labels[i]!) ? f.key : labels[i]!;
+      return {
+        id: `folder:${f.key}`,
+        label: `${label} (${f.count})`,
+        checked: !folderFilter.isHidden(f.key),
+        checkbox: true,
+        onselect: () => folderFilter.toggle(f.key),
+      };
+    });
+    if (hiddenOn) items.unshift({ id: 'show-all', label: 'Show all folders', icon: 'refresh', onselect: () => folderFilter.showAll() });
+    return items;
+  });
   // Rows show "5m" style stamps; one shared tick keeps them current without a timer per row.
   let now = $state(Date.now());
   $effect(() => {
@@ -79,6 +107,21 @@
     <button type="button" class="icon-btn" aria-label="Search" title="Search ({shortcutText('palette')})" onclick={() => openOverlay('palette')}>
       <Icon name="search" />
     </button>
+    {#if folders.length > 1 || hiddenOn}
+      <button
+        bind:this={filterBtn}
+        type="button"
+        class="icon-btn filter"
+        class:on={hiddenOn}
+        aria-label={hiddenOn ? 'Filter folders (some hidden)' : 'Filter folders'}
+        title="Show or hide folders"
+        aria-haspopup="menu"
+        aria-expanded={filterOpen}
+        onclick={() => (filterOpen = true)}
+      >
+        <Icon name="filter" />
+      </button>
+    {/if}
     <button
       type="button"
       class="icon-btn new"
@@ -156,6 +199,13 @@
           {/each}
         </section>
       {/each}
+
+      {#if groups.hiddenCount}
+        <p class="hidden-note" role="status">
+          <span>{groups.hiddenCount} hidden by folder filter</span>
+          <button type="button" class="link" onclick={() => folderFilter.showAll()}>Show all</button>
+        </p>
+      {/if}
     {/if}
 
     {#if sessionsStore.error}
@@ -190,6 +240,8 @@
     </button>
   </footer>
 </nav>
+
+<Menu open={filterOpen} onclose={() => (filterOpen = false)} anchor={filterBtn} title="Show folders" items={filterItems} />
 
 <style>
   .rail {
@@ -232,6 +284,27 @@
   }
   .new {
     color: var(--ink);
+  }
+  .filter.on {
+    color: var(--accent);
+  }
+  .hidden-note {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    margin: var(--s-4) var(--s-3) 0;
+    color: var(--ink-3);
+    font-size: var(--fs-sm);
+  }
+  .link {
+    color: var(--accent);
+    font-size: inherit;
+    min-height: var(--hit);
+    padding: 0 var(--s-1);
+  }
+  .link:hover {
+    text-decoration: underline;
   }
   .scroll {
     flex: 1;

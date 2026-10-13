@@ -35,6 +35,36 @@ function type(target: HTMLElement, value: string) {
   return ta;
 }
 
+describe('Composer auto-grow', () => {
+  it('re-measures the textarea when its width changes, not only when text changes', () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    const orig = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(cb: ResizeObserverCallback) {
+        callbacks.push(cb);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      const { target } = render(Composer, { gwId: 'g1' });
+      const ta = target.querySelector('textarea')!;
+      const fire = (width: number) =>
+        callbacks.forEach((cb) => cb([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver));
+      fire(120);
+      // A height measured at a narrow width sticks until something re-measures it.
+      ta.style.height = '136px';
+      fire(120); // same width: a height-only resize is grow()'s own write, ignored
+      expect(ta.style.height).toBe('136px');
+      fire(366);
+      expect(ta.style.height).not.toBe('136px');
+    } finally {
+      globalThis.ResizeObserver = orig;
+    }
+  });
+});
+
 describe('Composer send modes', () => {
   it('idle: one Send button, Enter sends a prompt', async () => {
     const send = vi.spyOn(active, 'send').mockResolvedValue(true);

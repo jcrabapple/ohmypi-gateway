@@ -294,6 +294,23 @@
     void text;
     grow();
   });
+  // grow() only runs on text changes, so a composer measured while its column
+  // was still narrow (mounting mid-layout, a drawer or sheet animating, a
+  // rotation) kept that wrapped placeholder height: an empty box 136px tall on
+  // a phone. Re-measure when the textarea's width changes; height changes are
+  // grow()'s own writes and are ignored so this cannot loop.
+  $effect(() => {
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let lastWidth = -1; // the observer's initial callback re-measures once after layout
+    const ro = new ResizeObserver(([entry]) => {
+      const w = Math.round(entry?.contentRect.width ?? 0);
+      if (w === lastWidth) return;
+      lastWidth = w;
+      grow();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
 
   onMount(() => {
     if (!viewport.coarse && !ended) el?.focus({ preventScroll: true });

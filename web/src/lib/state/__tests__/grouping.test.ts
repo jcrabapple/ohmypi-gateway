@@ -165,4 +165,33 @@ describe('pinned sessions: exclusion and ordering', () => {
     const g = groupSessions([], [a, b, c], NOW, new Set(), new Set(), new Set(['/s/a.jsonl', '/s/b.jsonl', '/s/c.jsonl']));
     expect(g.pinned.map((s) => s.file)).toEqual(['/s/b.jsonl', '/s/c.jsonl', '/s/a.jsonl']);
   });
+
+  it('folder filter hides history by cwd, never live or pinned, and counts what it hid', () => {
+    const t = NOW / 1000;
+    const g = groupSessions(
+      [live('l', { ompSessionFile: '/s/live.jsonl' })],
+      [
+        saved('/s/keep.jsonl', t, { cwd: '/w/projects' }),
+        saved('/s/cron1.jsonl', t, { cwd: '/home/j' }),
+        saved('/s/cron2.jsonl', t, { cwd: '/home/j' }),
+        saved('/s/pinned.jsonl', t, { cwd: '/home/j' }),
+        saved('/s/live.jsonl', t, { cwd: '/home/j' }),
+        saved('/s/nocwd.jsonl', t, { cwd: null, cwdFolder: '--tmp--' }),
+      ],
+      NOW,
+      new Set(),
+      new Set(),
+      new Set(['/s/pinned.jsonl']),
+      new Set(['/home/j', '--tmp--']),
+    );
+    expect(g.history.flatMap((h) => h.items.map((s) => s.file))).toEqual(['/s/keep.jsonl']);
+    expect(g.pinned.map((s) => s.file)).toEqual(['/s/pinned.jsonl']);
+    expect(g.idle.map((s) => s.gwId)).toEqual(['l']);
+    expect(g.hiddenCount).toBe(3);
+  });
+
+  it('hiddenCount is 0 with no folder filter', () => {
+    const g = groupSessions([], [saved('/s/a.jsonl', NOW / 1000, { cwd: '/x' })], NOW);
+    expect(g.hiddenCount).toBe(0);
+  });
 });

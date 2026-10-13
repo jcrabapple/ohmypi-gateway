@@ -4,6 +4,7 @@ export const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
   broom: '<path d="m19 3-8.1 8.1"/><path d="m12.6 9.4 2 2"/><path d="M7.1 14.9c-1.7 0-3 1.3-3 3 0 1.3-2.5 1.5-2 2 1.1 1.1 2.5 2.1 4 2.1 2.2 0 4-1.8 4-4a3 3 0 0 0-3-3.1z"/><path d="m10.1 12.9 1 1"/>',
+  filter: '<path d="M4 5h16l-6.2 7.4V19l-3.6-1.8v-4.8z"/>',
   pin: '<path d="M12 17v5"/><path d="M9 4h6l-1.2 6.2 3.2 2.3V15H7v-2.5l3.2-2.3L9 4z"/><path d="M8.5 10h7"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',

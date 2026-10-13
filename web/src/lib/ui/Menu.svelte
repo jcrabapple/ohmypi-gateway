@@ -10,8 +10,9 @@
     icon?: IconName;
     danger?: boolean;
     disabled?: boolean;
-    /** Makes the item a radio: shows a check when true. */
+    /** Makes the item a radio (or a checkbox with `checkbox`): shows a check when true. */
     checked?: boolean;
+    checkbox?: boolean;
     onselect: () => void;
   }
 
@@ -56,7 +57,7 @@
     {#each items as item (item.id)}
       <button
         type="button"
-        role={item.checked === undefined ? 'menuitem' : 'menuitemradio'}
+        role={item.checked === undefined ? 'menuitem' : item.checkbox ? 'menuitemcheckbox' : 'menuitemradio'}
         aria-checked={item.checked}
         class="item hit"
         class:danger={item.danger}

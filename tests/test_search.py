@@ -93,6 +93,39 @@ class SearchTest(unittest.TestCase):
         row = search_mod.query("reactor")["results"][0]
         self.assertEqual(row["title"], "probe the reactor")
 
+    def _titled(self, name: str, records: list[dict], prompt: str) -> None:
+        f = self.root / name
+        session_file(f, name, "/w/t", [("user", prompt), ("assistant", "ok")])
+        body = f.read_text().splitlines()
+        head = [r for r in records if r["type"] == "title"]
+        rest = [r for r in records if r["type"] != "title"]
+        f.write_text("\n".join([json.dumps(r) for r in head] + body + [json.dumps(r) for r in rest]) + "\n")
+
+    def test_title_prefers_omp_header_title(self):
+        self._titled("h.jsonl", [
+            {"type": "title", "v": 1, "title": "Named  by omp", "pad": "    "},
+            {"type": "title_change", "title": "Older name"},
+        ], "first prompt alpha")
+        search_mod.refresh()
+        self.assertEqual(search_mod.query("alpha")["results"][0]["title"], "Named by omp")
+
+    def test_empty_header_title_falls_back_to_prompt(self):
+        # A cleared header beats a stale title_change; '' means "use the prompt".
+        self._titled("e.jsonl", [
+            {"type": "title", "v": 1, "title": ""},
+            {"type": "title_change", "title": "Stale name"},
+        ], "first prompt bravo")
+        search_mod.refresh()
+        self.assertEqual(search_mod.query("bravo")["results"][0]["title"], "first prompt bravo")
+
+    def test_title_change_without_header(self):
+        self._titled("c2.jsonl", [
+            {"type": "title_change", "title": "First"},
+            {"type": "title_change", "title": "Latest name"},
+        ], "first prompt charlie")
+        search_mod.refresh()
+        self.assertEqual(search_mod.query("charlie")["results"][0]["title"], "Latest name")
+
     # ------------------------------------------------------------- queries
 
     def test_fts_query_is_safe_and_prefixed(self):

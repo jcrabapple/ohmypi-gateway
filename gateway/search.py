@@ -38,7 +38,7 @@ SESSIONS_DIR = Path(
 ARCHIVE_DIR = Path(
     os.environ.get("OMPGW_ARCHIVE_DIR") or str(Path.home() / ".omp" / "agent" / "archive" / "sessions")
 )
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 # How long a fresh-enough index is trusted before the next route call rescans.
 REFRESH_MIN_INTERVAL_S = 30
 _TOKEN = re.compile(r"[\w][\w./+-]*")
@@ -72,8 +72,9 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
         raise RuntimeError(
             f"search index schema v{version} is newer than this gateway (v{SCHEMA_VERSION}); "
             "delete the index file or upgrade")
-    if version == 1:
-        # v1 had no archived flag on files. Small corpus: drop and rebuild.
+    if version in (1, 2):
+        # v1 had no archived flag on files; v2 titled files by first prompt
+        # only (v3 prefers omp's stored title). Small corpus: drop and rebuild.
         con.executescript("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS messages;")
     con.executescript(
         """
@@ -114,6 +115,11 @@ def _parse_file(path: Path) -> tuple[list[dict], dict]:
     rows: list[dict] = []
     session_id = cwd = None
     first_user = ""
+    # omp's stored title: the line-1 header record is authoritative (it is
+    # rewritten in place on rename); title_change entries cover transcripts
+    # written before the header existed. Same rules as bridge._stored_title.
+    header_title: str | None = None
+    last_title_change = ""
     try:
         opener = gzip.open if path.suffix == ".gz" else open
         with opener(path, "rb") as fh:
@@ -127,6 +133,14 @@ def _parse_file(path: Path) -> tuple[list[dict], dict]:
                 if obj.get("type") == "session":
                     session_id = obj.get("id")
                     cwd = obj.get("cwd")
+                    continue
+                if obj.get("type") in ("title", "title_change"):
+                    value = obj.get("title")
+                    if isinstance(value, str):
+                        if obj["type"] == "title" and line_no == 1:
+                            header_title = value
+                        elif value.strip():
+                            last_title_change = value
                     continue
                 if obj.get("type") != "message":
                     continue
@@ -158,7 +172,9 @@ def _parse_file(path: Path) -> tuple[list[dict], dict]:
         "path": str(path),
         "session_id": session_id,
         "cwd": cwd,
-        "title": _title_of(first_user),
+        "title": _title_of(
+            (header_title if header_title is not None else last_title_change) or first_user
+        ),
     }
 
 

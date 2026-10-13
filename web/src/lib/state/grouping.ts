@@ -15,6 +15,13 @@ export interface SessionGroups {
   /** Saved sessions the user pinned; always rendered above the history. */
   pinned: SavedSession[];
   history: HistoryGroup[];
+  /** Saved transcripts left out of `history` by the folder filter. */
+  hiddenCount: number;
+}
+
+/** The rail folder filter's key for a saved transcript: its recorded cwd, else omp's mangled folder name. */
+export function folderKey(s: Pick<SavedSession, 'cwd' | 'cwdFolder'>): string {
+  return s.cwd || s.cwdFolder;
 }
 
 const LABELS: Record<HistoryGroup['key'], string> = {
@@ -46,7 +53,8 @@ export function historyBucket(mtimeSec: number, now: number): HistoryGroup['key'
  *  `todoActive` holds sessions whose last known state has an in_progress todo task; they read as
  *  working even between agent turns. `needsReview` holds sessions the user pinned for review;
  *  they read as ready for review while idle, but anything working or asking for input outranks
- *  the pin. */
+ *  the pin. `hiddenFolders` (folder filter) only thins the dated history: live
+ *  sessions and pinned transcripts always show. */
 export function groupSessions(
   live: readonly SessionInfo[],
   saved: readonly SavedSession[],
@@ -54,6 +62,7 @@ export function groupSessions(
   todoActive: ReadonlySet<string> = new Set(),
   needsReview: ReadonlySet<string> = new Set(),
   pinned: ReadonlySet<string> = new Set(),
+  hiddenFolders: ReadonlySet<string> = new Set(),
 ): SessionGroups {
   const needsYou: SessionInfo[] = [];
   const review: SessionInfo[] = [];
@@ -70,6 +79,7 @@ export function groupSessions(
   }
 
   const pinnedItems: SavedSession[] = [];
+  let hiddenCount = 0;
   const buckets = new Map<HistoryGroup['key'], SavedSession[]>();
   const sorted = [...saved].sort((a, b) => b.mtime - a.mtime);
   for (const s of sorted) {
@@ -77,6 +87,10 @@ export function groupSessions(
     // Pinned sessions leave the normal history buckets entirely.
     if (pinned.has(s.file)) {
       pinnedItems.push(s);
+      continue;
+    }
+    if (hiddenFolders.size && hiddenFolders.has(folderKey(s))) {
+      hiddenCount++;
       continue;
     }
     const key = historyBucket(s.mtime, now);
@@ -89,5 +103,5 @@ export function groupSessions(
     const items = buckets.get(key);
     if (items?.length) history.push({ key, label: LABELS[key], items });
   }
-  return { needsYou, review, running, idle, pinned: pinnedItems, history };
+  return { needsYou, review, running, idle, pinned: pinnedItems, history, hiddenCount };
 }

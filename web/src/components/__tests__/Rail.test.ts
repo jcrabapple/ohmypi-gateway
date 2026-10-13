@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SavedSession, SessionInfo } from '../../lib/api/types';
 import { storageKey } from '../../lib/platform/storage';
-import { pins, reviewed, sessionsStore } from '../../lib/state';
+import { folderFilter, pins, reviewed, sessionsStore } from '../../lib/state';
 import Rail from '../Rail.svelte';
 import { cleanup, render, settle } from './mount';
 
@@ -32,6 +32,7 @@ afterEach(() => {
   reviewed.needsReview = new Set();
   reviewed.done = new Set();
   pins.clear();
+  folderFilter.showAll();
   localStorage.clear();
 });
 
@@ -117,5 +118,64 @@ describe('Rail pinned sessions', () => {
     const { target } = render(Rail, {});
     expect(target.textContent).not.toContain('No sessions yet');
     expect(target.textContent).toContain('Pinned');
+  });
+});
+
+describe('Rail folder filter', () => {
+  const inFolder = (file: string, cwd: string) => ({ ...saved(file, 0), cwd });
+  const filterBtn = (t: HTMLElement) => t.querySelector<HTMLButtonElement>('button[aria-label^="Filter folders"]');
+  const menuItem = (t: HTMLElement, text: string) =>
+    [...t.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]')].find((b) => b.textContent?.includes(text));
+
+  it('has no filter button when every saved session shares one folder', () => {
+    sessionsStore.saved = [inFolder('/s/a.jsonl', '/w/p'), inFolder('/s/b.jsonl', '/w/p')];
+    const { target } = render(Rail, {});
+    expect(filterBtn(target)).toBeNull();
+  });
+
+  it('hides a folder from history, says so, and Show all brings it back', async () => {
+    sessionsStore.saved = [
+      inFolder('/s/keep.jsonl', '/w/projects'),
+      inFolder('/s/cron1.jsonl', '/home/j'),
+      inFolder('/s/cron2.jsonl', '/home/j'),
+    ];
+    const { target } = render(Rail, {});
+    filterBtn(target)!.click();
+    await settle();
+    const item = menuItem(target, 'j (2)');
+    expect(item?.getAttribute('role')).toBe('menuitemcheckbox');
+    expect(item?.getAttribute('aria-checked')).toBe('true');
+    item!.click();
+    await settle();
+    expect(folderFilter.isHidden('/home/j')).toBe(true);
+    expect(target.textContent).not.toContain('title /s/cron1.jsonl');
+    expect(target.textContent).toContain('title /s/keep.jsonl');
+    expect(target.textContent).toContain('2 hidden by folder filter');
+    expect(filterBtn(target)!.classList.contains('on')).toBe(true);
+
+    [...target.querySelectorAll('button')].find((b) => b.textContent === 'Show all')!.click();
+    await settle();
+    expect(folderFilter.hidden.size).toBe(0);
+    expect(target.textContent).toContain('title /s/cron1.jsonl');
+    expect(target.textContent).not.toContain('hidden by folder filter');
+  });
+
+  it('does not claim "No sessions yet" when everything is filtered out', () => {
+    sessionsStore.saved = [inFolder('/s/a.jsonl', '/home/j')];
+    folderFilter.toggle('/home/j');
+    const { target } = render(Rail, {});
+    expect(target.textContent).not.toContain('No sessions yet');
+    expect(target.textContent).toContain('1 hidden by folder filter');
+    // The button stays reachable to undo, even with a single folder left.
+    expect(filterBtn(target)).not.toBeNull();
+  });
+
+  it('disambiguates folders that share a basename with the full path', async () => {
+    sessionsStore.saved = [inFolder('/s/a.jsonl', '/tmp'), inFolder('/s/b.jsonl', '/home/j/tmp')];
+    const { target } = render(Rail, {});
+    filterBtn(target)!.click();
+    await settle();
+    expect(menuItem(target, '/tmp (1)')).toBeTruthy();
+    expect(menuItem(target, '/home/j/tmp (1)')).toBeTruthy();
   });
 });

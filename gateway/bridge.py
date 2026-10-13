@@ -991,6 +991,38 @@ def _safe_stat(p: Path) -> os.stat_result | None:
         return None
 
 
+def _stored_title(lines: list[str]) -> str:
+    """The session title omp persisted, or ''.
+
+    omp writes a padded `{"type":"title","v":1,"title":...}` record as line 1
+    and rewrites it in place on every rename, so it always holds the current
+    title. Older transcripts lack it; for those the last `title_change` seen in
+    the head is the best available answer. Empty titles mean "never named".
+    """
+    title = ""
+    for i, line in enumerate(lines):
+        # Both record kinds serialize "type" first; skip everything else cheaply.
+        if not line.startswith('{"type":"title'):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        kind = obj.get("type")
+        value = obj.get("title")
+        if kind not in ("title", "title_change") or not isinstance(value, str):
+            continue
+        value = " ".join(value.split())
+        if kind == "title" and i == 0:
+            # The header is authoritative when present, including '' (cleared).
+            return value
+        if value:
+            title = value
+    return title
+
+
 def scan_saved_sessions(limit: int = 200) -> list[dict]:
     """Saved omp sessions on disk, newest first, with a light title parse."""
     results: list[dict] = []
@@ -999,6 +1031,13 @@ def scan_saved_sessions(limit: int = 200) -> list[dict]:
         return results
     stats: list[tuple[Path, os.stat_result]] = []
     for p in root.rglob("*.jsonl"):
+        # Only top-level transcripts: sessions/<cwd-folder>/<file>.jsonl. omp
+        # keeps subagent transcripts in a folder named after the parent
+        # (sessions/<cwd-folder>/<parent-stem>/<Agent>.jsonl); listing those
+        # put "Complete assignment thoroughly: ..." task prompts in the rail as
+        # if they were sessions of their own.
+        if len(p.relative_to(root).parts) != 2:
+            continue
         st = _safe_stat(p)
         if st is not None:
             stats.append((p, st))
@@ -1029,7 +1068,15 @@ def scan_saved_sessions(limit: int = 200) -> list[dict]:
                 # deleted since (e2e temp dirs, removed checkouts) must not be
                 # offered. Only the gateway can see the filesystem.
                 entry["cwdExists"] = os.path.isdir(os.path.expanduser(entry["cwd"]))
+            stored = _stored_title(lines)
+            if stored:
+                # omp's own title (TUI auto-title, /name, set_session_name)
+                # beats the first-prompt snippet; the rail then matches what
+                # the session header shows once it is opened.
+                entry["title"] = stored[:120]
             for line in lines:
+                if stored:
+                    break
                 if not line.strip() or '"user"' not in line:
                     continue
                 try:
