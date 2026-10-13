@@ -127,10 +127,48 @@ describe('Rail folder filter', () => {
   const menuItem = (t: HTMLElement, text: string) =>
     [...t.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]')].find((b) => b.textContent?.includes(text));
 
-  it('has no filter button when every saved session shares one folder', () => {
+  it('shows the filter button only when saved sessions span more than one folder', () => {
     sessionsStore.saved = [inFolder('/s/a.jsonl', '/w/p'), inFolder('/s/b.jsonl', '/w/p')];
+    const one = render(Rail, {});
+    expect(filterBtn(one.target)).toBeNull();
+    cleanup();
+    sessionsStore.saved = [inFolder('/s/a.jsonl', '/w/p'), inFolder('/s/b.jsonl', '/w/q')];
+    const two = render(Rail, {});
+    expect(filterBtn(two.target)).not.toBeNull();
+  });
+
+  it('a stale hidden key for a folder no longer listed does not light the button', () => {
+    folderFilter.toggle('/gone');
+    sessionsStore.saved = [inFolder('/s/a.jsonl', '/w/p'), inFolder('/s/b.jsonl', '/w/q')];
     const { target } = render(Rail, {});
-    expect(filterBtn(target)).toBeNull();
+    expect(filterBtn(target)!.classList.contains('on')).toBe(false);
+    expect(filterBtn(target)!.getAttribute('aria-label')).toBe('Filter folders');
+  });
+
+  it('counts only sessions the filter can hide (pinned ones always show)', async () => {
+    sessionsStore.saved = [inFolder('/s/a.jsonl', '/w/p'), inFolder('/s/b.jsonl', '/w/p'), inFolder('/s/c.jsonl', '/w/q')];
+    pins.toggle('/s/a.jsonl');
+    const { target } = render(Rail, {});
+    filterBtn(target)!.click();
+    await settle();
+    expect(menuItem(target, 'p (1)')).toBeTruthy();
+  });
+
+  it('keeps the menu open across checkbox toggles; the button toggles it closed', async () => {
+    sessionsStore.saved = [inFolder('/s/a.jsonl', '/w/p'), inFolder('/s/b.jsonl', '/w/q'), inFolder('/s/c.jsonl', '/w/r')];
+    const { target } = render(Rail, {});
+    filterBtn(target)!.click();
+    await settle();
+    menuItem(target, 'p (1)')!.click();
+    await settle();
+    menuItem(target, 'q (1)')!.click();
+    await settle();
+    expect([...folderFilter.hidden].sort()).toEqual(['/w/p', '/w/q']);
+    expect(menuItem(target, 'q (1)')?.getAttribute('aria-checked')).toBe('false');
+    expect(filterBtn(target)!.getAttribute('aria-expanded')).toBe('true');
+    filterBtn(target)!.click();
+    await settle();
+    expect(filterBtn(target)!.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('hides a folder from history, says so, and Show all brings it back', async () => {

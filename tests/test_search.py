@@ -118,6 +118,24 @@ class SearchTest(unittest.TestCase):
         search_mod.refresh()
         self.assertEqual(search_mod.query("bravo")["results"][0]["title"], "first prompt bravo")
 
+    def test_whitespace_header_title_falls_back_to_prompt(self):
+        self._titled("ws.jsonl", [{"type": "title", "v": 1, "title": "   "}], "first prompt delta")
+        search_mod.refresh()
+        self.assertEqual(search_mod.query("delta")["results"][0]["title"], "first prompt delta")
+
+    def test_subagent_transcripts_are_not_indexed(self):
+        session_file(self.root / "parent.jsonl", "p", "/w/p", [("user", "parent echo words")])
+        (self.root / "parent").mkdir()
+        session_file(self.root / "parent" / "FairFlea.jsonl", "s", "/w/p", [("user", "subagent echo words")])
+        # Real layout is sessions/<folder>/<file>; this root holds files directly, so nest both one level.
+        folder = self.root / "-w-p"
+        folder.mkdir()
+        (self.root / "parent.jsonl").rename(folder / "parent.jsonl")
+        (self.root / "parent").rename(folder / "parent")
+        search_mod.refresh()
+        hits = search_mod.query("echo")["results"]
+        self.assertEqual([Path(h["path"]).name for h in hits], ["parent.jsonl"])
+
     def test_title_change_without_header(self):
         self._titled("c2.jsonl", [
             {"type": "title_change", "title": "First"},

@@ -32,6 +32,12 @@
 
   function choose(item: MenuItem) {
     if (item.disabled) return;
+    if (item.checkbox) {
+      // Checkbox items are multi-select: stay open (focus stays on the item) so
+      // several can be toggled in one visit.
+      item.onselect();
+      return;
+    }
     onclose();
     // Let the surface close and focus return before the action opens something else.
     queueMicrotask(item.onselect);

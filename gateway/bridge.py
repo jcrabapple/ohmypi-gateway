@@ -1001,8 +1001,9 @@ def _stored_title(lines: list[str]) -> str:
     """
     title = ""
     for i, line in enumerate(lines):
-        # Both record kinds serialize "type" first; skip everything else cheaply.
-        if not line.startswith('{"type":"title'):
+        # Cheap prefilter that tolerates key order and `": "` separators;
+        # message lines that merely mention a title fail the type check below.
+        if '"title' not in line or '"type"' not in line:
             continue
         try:
             obj = json.loads(line)
@@ -1036,7 +1037,7 @@ def scan_saved_sessions(limit: int = 200) -> list[dict]:
         # (sessions/<cwd-folder>/<parent-stem>/<Agent>.jsonl); listing those
         # put "Complete assignment thoroughly: ..." task prompts in the rail as
         # if they were sessions of their own.
-        if len(p.relative_to(root).parts) != 2:
+        if len(p.relative_to(root).parts) > 2:
             continue
         st = _safe_stat(p)
         if st is not None:

@@ -21,8 +21,16 @@
   );
 
   // ---- folder filter: hide whole folders of saved transcripts (scheduler runs, /tmp probes)
-  const folders = $derived(folderCounts(sessionsStore.saved));
-  const hiddenOn = $derived(folderFilter.hidden.size > 0);
+  // Count only what the filter can actually hide: live/running and pinned
+  // transcripts always show, so they would inflate the numbers.
+  const folders = $derived.by(() => {
+    const liveFiles = new Set(sessionsStore.live.map((s) => s.ompSessionFile).filter(Boolean));
+    return folderCounts(
+      sessionsStore.saved.filter((s) => !s.running && !liveFiles.has(s.file) && !pins.isPinned(s.file)),
+    );
+  });
+  // Keys for folders no longer listed (deleted, aged out) do not count as "some hidden".
+  const hiddenOn = $derived(folders.some((f) => folderFilter.isHidden(f.key)));
   let filterOpen = $state(false);
   let filterBtn: HTMLButtonElement | undefined = $state();
 
@@ -117,7 +125,7 @@
         title="Show or hide folders"
         aria-haspopup="menu"
         aria-expanded={filterOpen}
-        onclick={() => (filterOpen = true)}
+        onclick={() => (filterOpen = !filterOpen)}
       >
         <Icon name="filter" />
       </button>
@@ -203,7 +211,15 @@
       {#if groups.hiddenCount}
         <p class="hidden-note" role="status">
           <span>{groups.hiddenCount} hidden by folder filter</span>
-          <button type="button" class="link" onclick={() => folderFilter.showAll()}>Show all</button>
+          <button
+            type="button"
+            class="link"
+            onclick={() => {
+              folderFilter.showAll();
+              // This note unmounts with the last hidden row; keep focus somewhere real.
+              filterBtn?.focus();
+            }}
+          >Show all</button>
         </p>
       {/if}
     {/if}

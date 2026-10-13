@@ -210,10 +210,11 @@ either form.
 **Saved entries** are `{file, mtime, sizeBytes, cwdFolder, cwd, cwdExists, title, running}`.
 `title` is omp's stored session title when the session was named (the line-1
 `{"type":"title"}` record, or the last `title_change` in older transcripts),
-otherwise the first user prompt (up to 120 chars), otherwise `""`. Search
-results use the same rule. Only top-level transcripts are listed
-(`sessions/<folder>/<file>.jsonl`); subagent transcripts omp nests under a
-folder named after their parent are not sessions and are skipped.
+otherwise the first user prompt, otherwise `""` (120 chars max here, 90 in
+search results). Search uses the same title rule. Only top-level transcripts
+are listed or searched (`sessions/<folder>/<file>.jsonl`, same depth under the
+archive root); subagent transcripts omp nests under a folder named after their
+parent are not sessions and are skipped.
 `cwd` is the working directory recorded in the transcript (`null` when the file
 has none); prefer it over the mangled `cwdFolder` for display. `cwdExists` is
 whether that directory still exists on the gateway host (`null` when `cwd` is

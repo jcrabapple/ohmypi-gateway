@@ -138,7 +138,7 @@ def _parse_file(path: Path) -> tuple[list[dict], dict]:
                     value = obj.get("title")
                     if isinstance(value, str):
                         if obj["type"] == "title" and line_no == 1:
-                            header_title = value
+                            header_title = " ".join(value.split())
                         elif value.strip():
                             last_title_change = value
                     continue
@@ -194,6 +194,13 @@ def refresh(root: Path | None = None) -> dict:
                 scanned.append(scan_root.resolve())
                 for p in scan_root.rglob("*.jsonl*"):
                     if p.suffix not in (".jsonl", ".gz"):
+                        continue
+                    # Sessions only (<folder>/<file>), same rule as
+                    # bridge.scan_saved_sessions: subagent transcripts nest one
+                    # level deeper under the parent's stem, and a hit on one
+                    # would offer to resume a subagent as a session. Rows
+                    # indexed before this rule are pruned as "removed" below.
+                    if len(p.relative_to(scan_root).parts) > 2:
                         continue
                     try:
                         st = p.stat()
