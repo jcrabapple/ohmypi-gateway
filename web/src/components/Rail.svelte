@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { shortcutText } from '../lib/keymap';
   import { openOverlay, openSettings } from '../lib/overlays';
   import type { SavedSession } from '../lib/api/types';
@@ -24,7 +25,7 @@
   // Count only what the filter can actually hide: live/running and pinned
   // transcripts always show, so they would inflate the numbers.
   const folders = $derived.by(() => {
-    const liveFiles = new Set(sessionsStore.live.map((s) => s.ompSessionFile).filter(Boolean));
+    const liveFiles = new Set(sessionsStore.live.filter((s) => !s.exited).map((s) => s.ompSessionFile).filter(Boolean));
     return folderCounts(
       sessionsStore.saved.filter((s) => !s.running && !liveFiles.has(s.file) && !pins.isPinned(s.file)),
     );
@@ -33,6 +34,15 @@
   const hiddenOn = $derived(folders.some((f) => folderFilter.isHidden(f.key)));
   let filterOpen = $state(false);
   let filterBtn: HTMLButtonElement | undefined = $state();
+  let searchBtn: HTMLButtonElement | undefined = $state();
+
+  async function showAllFolders() {
+    folderFilter.showAll();
+    // The note unmounts with the last hidden row, and with a single folder left so
+    // does the filter button; land focus on whichever header control survives.
+    await tick();
+    (filterBtn?.isConnected ? filterBtn : searchBtn)?.focus();
+  }
 
   function folderLabel(key: string): string {
     return key.startsWith('/') ? basename(key) || '/' : key.replace(/^-+/, '') || key;
@@ -112,7 +122,7 @@
   <header>
     <span class="brand"><Icon name="mark" size={22} /><span>omp</span></span>
     <span class="spacer"></span>
-    <button type="button" class="icon-btn" aria-label="Search" title="Search ({shortcutText('palette')})" onclick={() => openOverlay('palette')}>
+    <button bind:this={searchBtn} type="button" class="icon-btn" aria-label="Search" title="Search ({shortcutText('palette')})" onclick={() => openOverlay('palette')}>
       <Icon name="search" />
     </button>
     {#if folders.length > 1 || hiddenOn}
@@ -214,11 +224,7 @@
           <button
             type="button"
             class="link"
-            onclick={() => {
-              folderFilter.showAll();
-              // This note unmounts with the last hidden row; keep focus somewhere real.
-              filterBtn?.focus();
-            }}
+            onclick={showAllFolders}
           >Show all</button>
         </p>
       {/if}
