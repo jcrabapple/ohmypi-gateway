@@ -49,6 +49,7 @@ from .bridge import (
     read_session_cwd,
     scan_saved_sessions,
 )
+from .fsbrowse import FsBrowseError, list_subdirs
 from .ledger import DEFAULT_DAYS, close_ledger, get_ledger
 
 VERSION = "0.6.0"
@@ -754,6 +755,16 @@ async def vacuum_sessions():
     with no files left under them, and custom-session-files pointers whose
     target no longer exists. Never touches transcripts or unreadable files."""
     return await asyncio.to_thread(_vacuum_sync)
+
+
+@app.get("/api/fs/dirs")
+async def fs_dirs(path: str = ""):
+    """Subfolders of one folder on this host, for the New session picker.
+    Directories only; see gateway/fsbrowse.py for the rules."""
+    try:
+        return await asyncio.to_thread(list_subdirs, path)
+    except FsBrowseError as e:
+        raise HTTPException(e.status, e.message) from None
 
 
 @app.post("/api/sessions")

@@ -113,6 +113,20 @@ export interface FileIndexEntry {
   size: number | null;
 }
 
+/** GET /api/fs/dirs: subfolders of one host folder. `path` is realpath-resolved. */
+export interface FsDirEntry {
+  name: string;
+  path: string;
+}
+
+export interface FsDirs {
+  path: string;
+  parent: string | null;
+  home: string;
+  dirs: FsDirEntry[];
+  truncated: boolean;
+}
+
 export interface FilesResponse {
   entries: FileIndexEntry[];
 }

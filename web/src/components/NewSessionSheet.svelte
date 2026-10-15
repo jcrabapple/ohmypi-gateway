@@ -4,6 +4,8 @@
   import { clearDraft, loadDraft, saveDraft } from '../lib/composer/drafts';
   import { APPROVAL_MODES } from '../lib/composer/modes';
   import { basename, uniqueCwds } from '../lib/format';
+  import { browseDirs } from '../lib/api/endpoints';
+  import type { FsDirs } from '../lib/api/types';
   import { device } from '../lib/platform/storage';
   import { nav, sessionsStore, ui } from '../lib/state';
   import { Icon, Sheet, Spinner } from '../lib/ui';
@@ -33,7 +35,46 @@
   });
   let bringDraft = $state(true);
 
+  // Folder picker: lists subfolders on the gateway host. Only the newest
+  // request may write state, so a slow listing cannot overwrite a later one.
+  let browsing = $state(false);
+  let browse = $state<FsDirs | null>(null);
+  let browseLoading = $state(false);
+  let browseError = $state<string | null>(null);
+  let browseBtn: HTMLButtonElement | undefined = $state();
+  let browseSeq = 0;
+
   const uid = $props.id();
+
+  async function loadDir(path: string) {
+    const seq = ++browseSeq;
+    browseLoading = true;
+    browseError = null;
+    try {
+      const res = await browseDirs(path);
+      if (seq === browseSeq) browse = res;
+    } catch (err) {
+      if (seq === browseSeq) browseError = err instanceof Error ? err.message : 'Could not open that folder';
+    } finally {
+      if (seq === browseSeq) browseLoading = false;
+    }
+  }
+
+  function openBrowser() {
+    browsing = true;
+    void loadDir(cwd.trim());
+  }
+
+  function closeBrowser() {
+    browsing = false;
+    browseBtn?.focus();
+  }
+
+  function useBrowsed() {
+    if (!browse) return;
+    cwd = browse.path;
+    closeBrowser();
+  }
 
   async function start(e?: SubmitEvent) {
     e?.preventDefault();
@@ -71,16 +112,61 @@
   <form class="form" onsubmit={start}>
     <div class="group">
       <label class="lbl" for="{uid}-cwd">Folder</label>
-      <input
-        id="{uid}-cwd"
-        class="field mono"
-        type="text"
-        bind:value={cwd}
-        autocomplete="off"
-        autocapitalize="off"
-        spellcheck="false"
-        placeholder={DEFAULT_CWD}
-      />
+      <div class="row">
+        <input
+          id="{uid}-cwd"
+          class="field mono"
+          type="text"
+          bind:value={cwd}
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          placeholder={DEFAULT_CWD}
+        />
+        <button
+          type="button"
+          class="btn btn-ghost"
+          bind:this={browseBtn}
+          aria-expanded={browsing}
+          aria-controls="{uid}-browse"
+          onclick={() => (browsing ? closeBrowser() : openBrowser())}
+        >
+          Browse
+        </button>
+      </div>
+      {#if browsing}
+        <div id="{uid}-browse" class="browser" role="region" aria-label="Folder picker">
+          <div class="bar">
+            <button type="button" class="btn btn-ghost" disabled={!browse?.parent || browseLoading} onclick={() => browse?.parent && loadDir(browse.parent)}>
+              Up
+            </button>
+            <button type="button" class="btn btn-ghost" disabled={browseLoading} onclick={() => loadDir('~')}>Home</button>
+            <span class="where mono" title={browse?.path ?? ''}>{browse?.path ?? ''}</span>
+            {#if browseLoading}<Spinner size={14} />{/if}
+          </div>
+          {#if browseError}<p class="error" role="alert">{browseError}</p>{/if}
+          {#if browse}
+            {#if browse.dirs.length}
+              <ul class="dirs" aria-label="Folders in {browse.path}">
+                {#each browse.dirs as d (d.path)}
+                  <li>
+                    <button type="button" class="dir mono" title={d.path} onclick={() => loadDir(d.path)}>{d.name}</button>
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="hint">No subfolders here.</p>
+            {/if}
+            {#if browse.truncated}<p class="hint">Only the first {browse.dirs.length} folders are shown.</p>{/if}
+          {/if}
+          <div class="bar end">
+            <button type="button" class="btn btn-ghost" onclick={closeBrowser}>Close</button>
+            <button type="button" class="btn btn-primary" disabled={!browse || browseLoading} onclick={useBrowsed}>
+              Use this folder
+            </button>
+          </div>
+        </div>
+      {/if}
       {#if suggestions.length}
         <div class="chips" role="group" aria-label="Recent folders">
           {#each suggestions as dir (dir)}
@@ -185,6 +271,72 @@
     font-size: var(--fs-sm);
     color: var(--ink-2);
     padding: 0;
+  }
+  .row {
+    display: flex;
+    gap: var(--s-2);
+    align-items: stretch;
+    min-width: 0;
+  }
+  .row .field {
+    flex: 1;
+    min-width: 0;
+  }
+  .browser {
+    display: grid;
+    gap: var(--s-2);
+    padding: var(--s-3);
+    border-radius: var(--r-md);
+    background: var(--inset);
+    box-shadow: var(--ring);
+    min-width: 0;
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+  }
+  .bar.end {
+    justify-content: flex-end;
+  }
+  .where {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-sm);
+    color: var(--ink-2);
+  }
+  .dirs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 240px;
+    overflow-y: auto;
+    display: grid;
+  }
+  .dir {
+    display: block;
+    width: 100%;
+    min-height: var(--hit);
+    padding: 0 var(--s-3);
+    text-align: left;
+    font-size: var(--fs-sm);
+    color: var(--ink);
+    border-radius: var(--r-sm, 6px);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dir:hover {
+    background: var(--hover);
+  }
+  .dir:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: -2px;
   }
   .chips {
     display: flex;

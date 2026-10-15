@@ -3,7 +3,7 @@
 import { api, resetSignedOut } from './client';
 import type {
   ApprovalMode, CatalogModels, CommandsResponse, EntriesResponse, EventsResponse, FileIndexEntry, FilesResponse,
-  ForkResponse, LedgerResponse, LedgerSessionsResponse, MessagesResponse, QueueEntry, SavedSession, SearchResponse,
+  ForkResponse, FsDirs, LedgerResponse, LedgerSessionsResponse, MessagesResponse, QueueEntry, SavedSession, SearchResponse,
   SessionInfo, SessionsList, SessionState, SessionStats, SubagentMessagesResponse, SystemInfo, ThinkingLevel,
   UiAnswer, UiRequest,
 } from './types';
@@ -127,6 +127,12 @@ export const sessions = {
       ),
   },
 };
+
+/** Subfolders of one folder on the gateway host, for the New session picker.
+ *  An empty path lets the gateway choose its default (~/projects, else home). */
+export function browseDirs(path: string, signal?: AbortSignal): Promise<FsDirs> {
+  return api<FsDirs>(`/api/fs/dirs?path=${encodeURIComponent(path)}`, { signal });
+}
 
 /** Index-only listing of ONE directory of the session cwd (for @-mentions).
  *  Rejects escapes at the gateway; any ApiError here means "no suggestions". */
