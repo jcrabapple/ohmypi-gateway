@@ -246,7 +246,10 @@ class OmpSession:
         # to answer; with --no-ui omp just fails approval-gated tool calls.
         args = [OMP_BIN, "--mode", "rpc", "--no-title",
                 "--cwd", self.cwd, "--approval-mode", self.approval_mode]
-        if is_test_cwd(self.cwd) and os.path.exists(TEST_OVERLAY):
+        if is_test_cwd(self.cwd):
+            # Fail closed: if the overlay file is missing, omp refuses to start
+            # ("Config overlay not found") instead of writing test runs into
+            # the real memory banks.
             args += ["--config", TEST_OVERLAY]
         if self.resume_session_file:
             args += ["-r", self.resume_session_file]

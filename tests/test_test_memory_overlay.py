@@ -6,11 +6,14 @@ Run: .venv/bin/python tests/test_test_memory_overlay.py
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from gateway import bridge
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from gateway import bridge  # noqa: E402
 
 
 class IsTestCwdTests(unittest.TestCase):
@@ -30,11 +33,12 @@ class IsTestCwdTests(unittest.TestCase):
         self.assertFalse(bridge.is_test_cwd("/tmpfoo/project"))
 
     def test_symlinked_home_resolves(self):
-        # Aurora: /home -> /var/home. The check must hold either way.
-        self.assertEqual(
-            bridge.is_test_cwd(os.path.expanduser("~/.hermes/cache/scratch/x")),
-            bridge.is_test_cwd(os.path.realpath(os.path.expanduser("~/.hermes/cache/scratch/x"))),
-        )
+        # Aurora: /home -> /var/home. Both spellings must match, and the test
+        # must assert the expected truth value, not just equality.
+        raw = os.path.expanduser("~/.hermes/cache/scratch/x")
+        self.assertTrue(bridge.is_test_cwd(raw))
+        self.assertTrue(bridge.is_test_cwd(os.path.realpath(raw)))
+
 
 
 class BuildArgsTests(unittest.TestCase):
@@ -73,14 +77,28 @@ class BuildArgsTests(unittest.TestCase):
                 bridge.TEST_OVERLAY = old
             self.assertNotIn("--config", args)
 
-    def test_missing_overlay_file_is_not_passed(self):
+    def test_missing_overlay_file_still_passed_so_omp_fails_closed(self):
+        # omp refuses to start on a missing --config ("Config overlay not
+        # found"), so a test cwd must always carry the flag.
         old = bridge.TEST_OVERLAY
         bridge.TEST_OVERLAY = "/nonexistent/test-overlay.yml"
         try:
             args = self._session("/tmp/ompgw-e2e-xyz")._build_args()
         finally:
             bridge.TEST_OVERLAY = old
-        self.assertNotIn("--config", args)
+        self.assertIn("--config", args)
+        self.assertEqual(args[args.index("--config") + 1], "/nonexistent/test-overlay.yml")
+
+    def test_resume_keeps_overlay_and_resume_flag(self):
+        s = self._session("/tmp/ompgw-e2e-xyz")
+        s.resume_session_file = "/home/jason/.omp/agent/sessions/x/y.jsonl"
+        s.requested_model = "openrouter/z-ai/glm-5.3-flashx"
+        args = s._build_args()
+        self.assertIn("--config", args)
+        self.assertIn("-r", args)
+        self.assertEqual(args[args.index("-r") + 1], s.resume_session_file)
+        self.assertEqual(args[args.index("--model") + 1], s.requested_model)
+
 
 
 if __name__ == "__main__":
