@@ -27,6 +27,22 @@ from .ledger import record_turn, split_model_id
 log = logging.getLogger("ohmpi-gateway.bridge")
 
 OMP_BIN = os.path.expanduser("~/.bun/bin/omp")
+
+# Sessions rooted in throwaway dirs (e2e and review instances, scratch probes)
+# must not write into Jason's real mnemopi banks. The overlay turns memory off
+# for those runs only; the real config is untouched. Dirs are matched by
+# realpath so /home -> /var/home on Aurora does not defeat the check.
+TEST_CWD_PREFIXES = ("/tmp", "~/.hermes/cache/scratch")
+TEST_OVERLAY = os.path.expanduser("~/.omp/agent/test-overlay.yml")
+
+
+def is_test_cwd(cwd: str) -> bool:
+    real = os.path.realpath(os.path.expanduser(cwd)) + os.sep
+    for prefix in TEST_CWD_PREFIXES:
+        base = os.path.realpath(os.path.expanduser(prefix)) + os.sep
+        if real.startswith(base):
+            return True
+    return False
 # Resolved once: omp reports symlink-free paths (/home -> /var/home on Fedora
 # Atomic), so every session file path the gateway emits or compares is canonical.
 OMP_AGENT_DIR = Path(os.path.expanduser("~/.omp/agent")).resolve()
@@ -230,6 +246,8 @@ class OmpSession:
         # to answer; with --no-ui omp just fails approval-gated tool calls.
         args = [OMP_BIN, "--mode", "rpc", "--no-title",
                 "--cwd", self.cwd, "--approval-mode", self.approval_mode]
+        if is_test_cwd(self.cwd) and os.path.exists(TEST_OVERLAY):
+            args += ["--config", TEST_OVERLAY]
         if self.resume_session_file:
             args += ["-r", self.resume_session_file]
         if self.requested_model:
