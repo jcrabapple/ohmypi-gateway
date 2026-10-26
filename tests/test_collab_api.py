@@ -111,5 +111,29 @@ class PushTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(_COLLAB_LINK_STATUS), 4)
 
 
+class StatusEndpointTests(unittest.IsolatedAsyncioTestCase):
+    """GET /api/collab is a plain handler (no request state), so the route is
+    exercised by awaiting it directly; httpx is not a dependency here."""
+
+    async def test_collab_status_shape(self):
+        from gateway.main import collab_status
+        out = await collab_status()
+        self.assertIsInstance(out["hosts"], list)
+        st = out["stats"]
+        for key in ("polls", "pollErrors", "queries", "hostsSeenMax",
+                    "asksMinted", "pushesSent", "lastPollMs"):
+            self.assertIn(key, st)
+        self.assertEqual(set(st["queryFailures"]), {"noReply", "gone", "osError"})
+        self.assertIsInstance(st["polls"], int)
+
+    async def test_collab_status_counts_this_process(self):
+        from gateway.main import collab_status
+        from gateway import collab as collab_mod
+        before = (await collab_status())["stats"]["polls"]
+        await collab_mod.get_discovery().poll_once()
+        after = (await collab_status())["stats"]["polls"]
+        self.assertGreaterEqual(after, before + 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

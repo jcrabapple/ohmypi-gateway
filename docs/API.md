@@ -251,6 +251,7 @@ remaining rows newest `startedAt` first.
 
 | Method | Path | |
 |---|---|---|
+| GET | `/collab` | `{hosts: [...], stats: {...}}`: the same rows as `external`, plus process-lifetime discovery counters for judging a rollout: `polls`, `pollErrors`, `queries`, `queryFailures {noReply, gone, osError}`, `hostsSeenMax`, `asksMinted`, `pushesSent` (devices reached), `lastPollMs`. In memory only, reset by a gateway restart, never persisted |
 | POST | `/collab/{instanceId}/link` | body `{generation, access?}` (`access` defaults to `view`, must be `view` or `control`; `generation` must be the integer the row shows, `>= 1`). Returns a one-shot capability URL for the host: `{url}` with `Cache-Control: no-store`. Open it, don't store it: the capability is minted per tap, never persisted or cached by the gateway. Errors: unknown instance 404, host moved to a newer generation 409, that access is not offered 403, host unreachable 502; bad body 422 |
 
 **Resuming.** `POST /sessions {resumeFrom}`:

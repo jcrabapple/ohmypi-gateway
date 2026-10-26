@@ -165,6 +165,30 @@ class Discovery:
         # Last listing failure signature: an unreadable directory must not warn
         # on every poll, and must not read as "no hosts" (see poll_once).
         self._last_list_error: str | None = None
+        # Soak counters: in-memory, process-lifetime, never persisted. They exist
+        # so a rollout on an idle box can be judged on numbers instead of vibes
+        # (see GET /api/collab).
+        self._stats: dict = {
+            "polls": 0,
+            "pollErrors": 0,
+            "queries": 0,
+            "queryFailures": {"noReply": 0, "gone": 0, "osError": 0},
+            "hostsSeenMax": 0,
+            "asksMinted": 0,
+            "pushesSent": 0,
+            "lastPollMs": 0,
+        }
+
+    def stats(self) -> dict:
+        """Copy of the counters (a caller cannot mutate the live registry)."""
+        out = dict(self._stats)
+        out["queryFailures"] = dict(self._stats["queryFailures"])
+        return out
+
+    def note_push(self, delivered: int | None) -> None:
+        """Record how many devices an ask push actually reached."""
+        if isinstance(delivered, int) and not isinstance(delivered, bool) and delivered > 0:
+            self._stats["pushesSent"] += delivered
 
     # -- reconciliation ------------------------------------------------
 
@@ -257,6 +281,9 @@ class Discovery:
         valid = (known[:MAX_ENTRIES - reserved] + fresh[:MAX_ENTRIES])[:MAX_ENTRIES]
         for p, e in valid:
             self._paths[e["instanceId"]] = p
+        self._stats["polls"] += 1
+        self._stats["queries"] += len(valid)
+        self._stats["lastPollMs"] = _epoch_ms()
         self._mints = []
         results = await asyncio.gather(
             *(_query(e["endpoint"], {"v": 1, "token": e["token"],
@@ -284,6 +311,7 @@ class Discovery:
                 # privacy regression or invalid shape: keep previous row
                 host.stale = True
                 continue
+            self._note_query_failure(res)
             self._mark_failure(host, res, now)
 
         for host, ask in self._mints:
@@ -310,6 +338,8 @@ class Discovery:
             anchor = host.last_ok if host.last_ok is not None else host.born
             if now - anchor > TTL_S:
                 self._drop(iid, now)
+
+        self._stats["hostsSeenMax"] = max(self._stats["hostsSeenMax"], len(self._hosts))
 
     def _list_entries(self) -> list[Path]:
         """Every *.json entry, newest first. One path whose stat() fails (a
@@ -342,10 +372,26 @@ class Discovery:
         if required and not host.had_required:
             host.had_required = True
             host.ask = self._mint_ask(host)
+            self._stats["asksMinted"] += 1
             self._mints.append((host, dict(host.ask)))
         elif not required and host.had_required:
             host.had_required = False
             host.ask = None
+
+    def _note_query_failure(self, res: object) -> None:
+        """Classify one unsuccessful query for the soak counters. `res` is None
+        (timeout, malformed reply, bytes over the cap), an OSError raised by the
+        query, or a wire error reply (`{"ok": false}`)."""
+        failures = self._stats["queryFailures"]
+        if isinstance(res, OSError) and getattr(res, "errno", None) in (
+                errno.ENOENT, errno.ECONNREFUSED):
+            failures["gone"] += 1
+        elif isinstance(res, BaseException):
+            failures["osError"] += 1
+        elif res is None:
+            failures["noReply"] += 1
+        elif isinstance(res, dict):
+            failures["noReply"] += 1        # ok:false / unvalidated snapshot
 
     def _mark_failure(self, host: Host, res: object, now: float) -> None:
         """Only ENOENT/ECONNREFUSED retires a row immediately; every other
@@ -449,6 +495,7 @@ class Discovery:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - never take gateway down
+                self._stats["pollErrors"] += 1
                 log.warning("collab poll failed: %r", exc)
             await asyncio.sleep(POLL_S)
 

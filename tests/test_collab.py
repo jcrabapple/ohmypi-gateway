@@ -454,6 +454,42 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         finally:
             srv.close()
 
+    async def test_stats_are_counted_and_copied(self):
+        s = str(self.dir / "a.sock")
+        srv, _ = await self.serve([
+            {"ok": True, "v": 1, "snapshot": _snap(instanceId="aaa")},
+            {"ok": True, "v": 1, "snapshot": _snap(instanceId="aaa",
+                                                   inputRequired=True)},
+        ], s)
+        try:
+            self.write_entry("a.json", "aaa", s)
+            d = self.make()
+            st = d.stats()
+            self.assertEqual((st["polls"], st["queries"], st["asksMinted"]), (0, 0, 0))
+            await d.poll_once()
+            await d.poll_once()
+            d.note_push(2)
+            d.note_push(None)
+            st = d.stats()
+            self.assertEqual(st["polls"], 2)
+            self.assertEqual(st["queries"], 2)
+            self.assertEqual(st["hostsSeenMax"], 1)
+            self.assertEqual(st["asksMinted"], 1)
+            self.assertEqual(st["pushesSent"], 2)
+            self.assertGreater(st["lastPollMs"], 0)
+            self.assertEqual(st["queryFailures"], {"noReply": 0, "gone": 0, "osError": 0})
+            # A caller mutating the returned dict must not touch the registry.
+            st["queryFailures"]["noReply"] = 99
+            self.assertEqual(d.stats()["queryFailures"]["noReply"], 0)
+
+            # A dead socket after the host was seen counts as "gone".
+            srv.close()
+            Path(s).unlink(missing_ok=True)
+            await d.poll_once()
+            self.assertEqual(d.stats()["queryFailures"]["gone"], 1)
+        finally:
+            srv.close()
+
     async def test_absent_directory_is_quiet(self):
         """No published hosts (collab off) is the normal empty state: no rows,
         no warning, and no state left behind that would suppress a real one."""

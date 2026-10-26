@@ -82,7 +82,8 @@ async def _push_ask(row: dict, ask: dict) -> None:
     here (discovery already guards the callback)."""
     label = row.get("title") or Path(row.get("cwd") or "").name or "An omp session"
     try:
-        await push.push_attention(row["instanceId"], label, ask["requestId"])
+        delivered = await push.push_attention(row["instanceId"], label, ask["requestId"])
+        collab.get_discovery().note_push(delivered)
     except Exception:  # noqa: BLE001 - a push failure must not kill the poll
         log.exception("collab attention push failed for %s", row.get("instanceId"))
 
@@ -731,6 +732,18 @@ _COLLAB_LINK_STATUS = {
     "access_unavailable": 403,
     "unreachable": 502,
 }
+
+
+@app.get("/api/collab")
+async def collab_status():
+    """External omp collab hosts plus the discovery counters, read-only.
+
+    The counters are process-lifetime and in memory on purpose: they exist so a
+    rollout can be judged on numbers (peak concurrent desk sessions, asks per
+    day, pushes delivered, query failures) without adding storage or metrics.
+    """
+    d = collab.get_discovery()
+    return {"hosts": d.snapshot(), "stats": d.stats()}
 
 
 @app.post("/api/collab/{instance_id}/link")
