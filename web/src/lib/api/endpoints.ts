@@ -114,6 +114,12 @@ export const sessions = {
   setThinking: (id: string, level: ThinkingLevel) =>
     api<unknown>(`${sid(id)}/thinking`, { method: POST, body: { level } }),
   rename: (id: string, name: string) => api<unknown>(`${sid(id)}/name`, { method: POST, body: { name } }),
+  /** One-shot bearer capability URL for an external omp instance. Never render,
+   *  log or persist the returned url. */
+  collabLink: (instanceId: string, generation: number, access: 'view' | 'control') =>
+    api<{ url: string }>(`/api/collab/${encodeURIComponent(instanceId)}/link`, {
+      method: POST, body: { generation, access },
+    }),
   answerUi: (id: string, requestId: string, answer: UiAnswer) =>
     api<unknown>(`${sid(id)}/ui/${encodeURIComponent(requestId)}`, { method: POST, body: answer }),
 

@@ -1,5 +1,5 @@
 // Pure grouping of the sessions list into the rail's sections.
-import type { SavedSession, SessionInfo } from '../api/types';
+import type { ExternalSession, SavedSession, SessionInfo } from '../api/types';
 
 export interface HistoryGroup {
   key: 'today' | 'yesterday' | 'week' | 'older';
@@ -17,6 +17,10 @@ export interface SessionGroups {
   history: HistoryGroup[];
   /** Saved transcripts left out of `history` by the folder filter. */
   hiddenCount: number;
+  /** External omp instances waiting on a blocking question, oldest ask first. */
+  externalNeedsYou: ExternalSession[];
+  /** Every other external instance: stale last, then newest first. */
+  externalRest: ExternalSession[];
 }
 
 /** The rail folder filter's key for a saved transcript: its recorded cwd, else omp's mangled folder name. */
@@ -63,6 +67,7 @@ export function groupSessions(
   needsReview: ReadonlySet<string> = new Set(),
   pinned: ReadonlySet<string> = new Set(),
   hiddenFolders: ReadonlySet<string> = new Set(),
+  external: readonly ExternalSession[] = [],
 ): SessionGroups {
   const needsYou: SessionInfo[] = [];
   const review: SessionInfo[] = [];
@@ -103,5 +108,21 @@ export function groupSessions(
     const items = buckets.get(key);
     if (items?.length) history.push({ key, label: LABELS[key], items });
   }
-  return { needsYou, review, running, idle, pinned: pinnedItems, history, hiddenCount };
+  const externalNeedsYou: ExternalSession[] = [];
+  const externalRest: ExternalSession[] = [];
+  for (const e of external) {
+    if (e.inputRequired && e.ask) externalNeedsYou.push(e);
+    else externalRest.push(e);
+  }
+  // Oldest ask first, so the question waiting longest is at the top.
+  externalNeedsYou.sort((a, b) => a.ask!.since - b.ask!.since || a.instanceId.localeCompare(b.instanceId));
+  // Fresh and recently started first; an instance the gateway has not heard
+  // from in a while goes to the bottom.
+  externalRest.sort((a, b) =>
+    Number(a.stale) - Number(b.stale) || b.startedAt - a.startedAt || a.instanceId.localeCompare(b.instanceId),
+  );
+  return {
+    needsYou, review, running, idle, pinned: pinnedItems, history, hiddenCount,
+    externalNeedsYou, externalRest,
+  };
 }

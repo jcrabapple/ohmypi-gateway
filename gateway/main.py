@@ -37,6 +37,7 @@ from .auth import (
     forwarded_https,
     origin_allowed,
 )
+from . import collab, push  # noqa: E402  (no cycle: neither imports main)
 from .bridge import (
     DEFAULT_APPROVAL_MODE,
     OMP_AGENT_DIR,
@@ -74,8 +75,46 @@ APPROVAL_MODES = ("always-ask", "write", "yolo")
 tokens = TokenStore(PROJECT_DIR / "auth-token")
 limiter = FailureLimiter()
 
+
+async def _push_ask(row: dict, ask: dict) -> None:
+    """Discovery callback: an external omp host just started waiting for
+    input. Best-effort push to every registered device; never raises past
+    here (discovery already guards the callback)."""
+    label = row.get("title") or Path(row.get("cwd") or "").name or "An omp session"
+    try:
+        await push.push_attention(row["instanceId"], label, ask["requestId"])
+    except Exception:  # noqa: BLE001 - a push failure must not kill the poll
+        log.exception("collab attention push failed for %s", row.get("instanceId"))
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(app):
+    """Startup/shutdown as one context (Starlette runs on_event handlers only
+    when no lifespan is set, so everything lives here now). Startup must
+    never fail the gateway: ledger init is suppressed and collab discovery
+    already starts its poller without raising."""
+    # Create the usage ledger (schema v1) on start; a broken path must not
+    # keep the gateway from booting.
+    with contextlib.suppress(Exception):
+        get_ledger()
+    app.state.reaper = asyncio.create_task(_reaper())
+    d = collab.get_discovery()
+    d.on_ask = _push_ask if push.available() else None
+    await d.start()
+    try:
+        yield
+    finally:
+        await d.stop()
+        await get_manager().shutdown_all()
+        # Close the ledger last; a later get_ledger() reconnects instead of
+        # writing through a closed connection.
+        with contextlib.suppress(Exception):
+            close_ledger()
+
+
 app = FastAPI(title="ohmypi-gateway", version=VERSION,
-              docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
+              docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json",
+              lifespan=_lifespan)
 
 # Bearer-token clients (desktop, mobile, other web origins) may call from any
 # origin. Credentials are NOT allowed cross-origin, so the session cookie is
@@ -680,7 +719,41 @@ async def list_sessions(include_saved: bool = True, limit: int = 100):
     await get_manager().reap_dead()
     live = get_manager().list_live()
     saved = scan_saved_sessions(limit=min(limit, 500)) if include_saved else []
-    return {"live": live, "saved": saved}
+    return {"live": live, "saved": saved, "external": collab.get_discovery().snapshot()}
+
+
+# ------------------------------------------------------------------- collab
+
+# CollabError.code -> HTTP status for the link route.
+_COLLAB_LINK_STATUS = {
+    "not_found": 404,
+    "stale_generation": 409,
+    "access_unavailable": 403,
+    "unreachable": 502,
+}
+
+
+@app.post("/api/collab/{instance_id}/link")
+async def collab_link(instance_id: str, request: Request):
+    """Fetch a one-shot capability URL for an external omp collab host, per
+    tap. The URL is returned once with Cache-Control: no-store and is never
+    stored, logged, or cached anywhere on the gateway."""
+    body = await json_body(request)
+    access = body.get("access", "view")
+    generation = body.get("generation")
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+        raise HTTPException(422, "generation must be an integer >= 1")
+    if access not in ("view", "control"):
+        raise HTTPException(422, "access must be view|control")
+    try:
+        out = await collab.get_discovery().link(instance_id, generation, access)
+    except collab.CollabError as e:
+        log.warning("collab link failed: instance=%s generation=%s access=%s code=%s",
+                    instance_id, generation, access, e.code)
+        raise HTTPException(_COLLAB_LINK_STATUS.get(e.code, 502), e.code) from None
+    log.info("collab link issued: instance=%s generation=%s access=%s code=ok",
+             instance_id, generation, access)
+    return JSONResponse({"url": out["url"]}, headers={"Cache-Control": "no-store"})
 
 
 @app.delete("/api/sessions/saved")
@@ -1468,24 +1541,6 @@ async def _reaper() -> None:
             if now - s.last_activity > IDLE_REAP_SEC:
                 with contextlib.suppress(Exception):
                     await m.stop(gid)
-
-
-@app.on_event("startup")
-async def _startup() -> None:
-    # Create the usage ledger (schema v1) on start; a broken path must not
-    # keep the gateway from booting.
-    with contextlib.suppress(Exception):
-        get_ledger()
-    app.state.reaper = asyncio.create_task(_reaper())
-
-
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    await get_manager().shutdown_all()
-    # Close the ledger last; a later get_ledger() reconnects instead of
-    # writing through a closed connection.
-    with contextlib.suppress(Exception):
-        close_ledger()
 
 
 # ------------------------------------------------------------------- static

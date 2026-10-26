@@ -8,9 +8,10 @@
   import { active, auth, folderFilter, nav, reviewed, sessionsStore, ui } from '../lib/state';
   import { folderCounts } from '../lib/state/folders.svelte';
   import { confirm, Icon, Kbd, Menu, type MenuItem } from '../lib/ui';
-  import type { SessionInfo } from '../lib/api/types';
+  import type { ExternalSession, SessionInfo } from '../lib/api/types';
   import ConnectionDot from './ConnectionDot.svelte';
   import RailRow from './RailRow.svelte';
+  import ExternalRow from './ExternalRow.svelte';
   import type { SessionStatus } from './StatusGlyph.svelte';
 
   const groups = $derived(sessionsStore.groups);
@@ -18,7 +19,8 @@
   const empty = $derived(
     sessionsStore.loaded &&
       !groups.needsYou.length && !groups.review.length && !groups.running.length && !groups.idle.length &&
-      !groups.pinned.length && !groups.history.length && !groups.hiddenCount,
+      !groups.pinned.length && !groups.history.length && !groups.hiddenCount &&
+      !groups.externalNeedsYou.length && !groups.externalRest.length,
   );
 
   // ---- folder filter: hide whole folders of saved transcripts (scheduler runs, /tmp probes)
@@ -116,6 +118,11 @@
   function openNew(e: MouseEvent) {
     ui.open('new-session', e.currentTarget as HTMLElement);
   }
+
+  /** External rows render inside the Needs you section; other groups have none. */
+  function extFor(key: 'needsYou' | 'review' | 'running' | 'idle'): ExternalSession[] {
+    return key === 'needsYou' ? groups.externalNeedsYou : [];
+  }
 </script>
 
 <nav class="rail" aria-label="Sessions">
@@ -168,9 +175,10 @@
     {:else}
       {#each live as g (g.key)}
         {@const list = groups[g.key]}
-        {#if list.length}
+        {@const external = extFor(g.key)}
+        {#if list.length || external.length}
           <section aria-labelledby="rail-{g.key}">
-            <h2 id="rail-{g.key}" class="eyebrow"><span>{g.label}</span><span class="count">{list.length}</span></h2>
+            <h2 id="rail-{g.key}" class="eyebrow"><span>{g.label}</span><span class="count">{list.length + external.length}</span></h2>
             {#each list as s (s.gwId)}
               <RailRow
                 title={sessionTitle(s, sessionsStore.saved)}
@@ -183,9 +191,21 @@
                 onclick={() => nav.open(s.gwId)}
               />
             {/each}
+            {#each external as row (row.instanceId)}
+              <ExternalRow {row} />
+            {/each}
           </section>
         {/if}
       {/each}
+
+      {#if groups.externalRest.length}
+        <section aria-labelledby="rail-elsewhere">
+          <h2 id="rail-elsewhere" class="eyebrow"><span>Other terminals</span><span class="count">{groups.externalRest.length}</span></h2>
+          {#each groups.externalRest as row (row.instanceId)}
+            <ExternalRow {row} />
+          {/each}
+        </section>
+      {/if}
 
       {#if groups.pinned.length}
         <section aria-labelledby="rail-pinned">

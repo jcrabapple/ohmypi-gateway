@@ -798,5 +798,40 @@ try:
 finally:
     req("DELETE", f"/api/sessions/{gid}")
 
+# ------------------------------------------------------------ collab discovery
+
+code, data, _ = req("GET", "/api/sessions?include_saved=false")
+external = data.get("external") if isinstance(data, dict) else None
+check("collab-external-array", code == 200 and isinstance(external, list),
+      f"-> {code} {len(external or [])} external")
+
+if external:
+    row = external[0]
+    needed = {"kind", "instanceId", "generation", "pid", "cwd", "startedAt",
+              "access", "inputRequired", "ask", "lastSeenAt", "stale"}
+    check("collab-external-row-shape",
+          needed <= set(row) and row.get("kind") == "external"
+          and not ({"prompt", "answer", "options", "requestId"} & set(row)),
+          f"{len(row)} fields")
+    iid = urllib.request.quote(str(row.get("instanceId")))
+    gen = row.get("generation")
+    code, data, hdrs = req("POST", f"/api/collab/{iid}/link",
+                           {"generation": gen, "access": "view"})
+    check("collab-link-ok-no-store",
+          code == 200 and isinstance((data or {}).get("url"), str)
+          and (hdrs.get("Cache-Control") or "") == "no-store", f"-> {code}")
+    code, data, _ = req("POST", f"/api/collab/{iid}/link",
+                        {"generation": (gen or 1) + 99, "access": "view"})
+    check("collab-link-stale-rejected", code in (409, 502), f"-> {code}")
+else:
+    check("collab-external-row-shape", True, "(no host publishing; covered by test_collab.py)")
+
+code, data, _ = req("POST", "/api/collab/nonexistent/link", {"generation": 1})
+check("collab-link-unknown-404", code == 404, f"-> {code}")
+code, data, _ = req("POST", "/api/collab/nonexistent/link", {"generation": 0})
+check("collab-link-bad-generation-422", code == 422, f"-> {code}")
+code, data, _ = req("POST", "/api/collab/nonexistent/link", {"generation": 1, "access": "root"})
+check("collab-link-bad-access-422", code == 422, f"-> {code}")
+
 print(f"\n{BASE}: " + ("all green" if not failures else f"FAILURES: {failures}"))
 sys.exit(1 if failures else 0)

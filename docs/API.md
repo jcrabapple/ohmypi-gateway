@@ -163,7 +163,7 @@ session is a transcript on disk that can be resumed.
 
 | Method | Path | |
 |---|---|---|
-| GET | `/sessions?limit=&include_saved=` | `{live: [...], saved: [...]}` |
+| GET | `/sessions?limit=&include_saved=` | `{live: [...], saved: [...], external: [...]}` (`external` below) |
 | POST | `/sessions` | start: `{cwd?, model?, thinking?, approvalMode?, resumeFrom?, advisor?}`. `approvalMode` is `yolo` (default) \| `write` \| `always-ask`. `resumeFrom` must be a file under `~/.omp/agent/sessions` (see Resuming below). `advisor` (default false) launches the child with `--advisor` (omp's advisor runtime); launch-time only — no mid-session toggle, carried through forks |
 | GET | `/sessions/{id}` | session info (below) |
 | DELETE | `/sessions/{id}` | stop the child; transcript stays on disk |
@@ -221,6 +221,37 @@ whether that directory still exists on the gateway host (`null` when `cwd` is
 `null`); clients should not offer a folder with `cwdExists: false` as a
 one-tap pick, and should treat a missing key (older gateways) as unknown.
 `running` is true when a live session has that file open.
+
+### External collab sessions
+
+`GET /sessions` also returns `external`: a read-only snapshot of interactive
+omp sessions on this host that publish themselves for collab (a host appears
+only when omp runs with `collab.autoStart` set to `view` or `control`). Rows
+with an open input request come first (oldest request first), then the
+remaining rows newest `startedAt` first.
+
+| Field | |
+|---|---|
+| `kind` | always `"external"` |
+| `instanceId` | the host's instance id; the path key for the link endpoint |
+| `generation` | the host's current collab generation (>= 1); send it back on link, and re-read it after any restart of the host |
+| `pid` | host process id on the gateway machine |
+| `sessionId` | omp session id, or `null` |
+| `title` | session name, trimmed to 120 chars, or `null` |
+| `cwd` | host working directory |
+| `model` | `{provider, id}` or `null` |
+| `startedAt` | epoch milliseconds, host-reported |
+| `participants` | participant count |
+| `access` | the highest access the host currently offers: `view` or `control` |
+| `busy` | host-reported, or `null` when unknown |
+| `inputRequired` | true when the host is blocked waiting for input |
+| `ask` | `{requestId, since}` when `inputRequired` just turned true (`since` is epoch ms); `null` otherwise. One mint per false->true edge |
+| `lastSeenAt` | epoch ms of the gateway's last successful poll of this host |
+| `stale` | true when the last poll failed; the row keeps its last known values until it expires |
+
+| Method | Path | |
+|---|---|---|
+| POST | `/collab/{instanceId}/link` | body `{generation, access?}` (`access` defaults to `view`, must be `view` or `control`; `generation` must be the integer the row shows, `>= 1`). Returns a one-shot capability URL for the host: `{url}` with `Cache-Control: no-store`. Open it, don't store it: the capability is minted per tap, never persisted or cached by the gateway. Errors: unknown instance 404, host moved to a newer generation 409, that access is not offered 403, host unreachable 502; bad body 422 |
 
 **Resuming.** `POST /sessions {resumeFrom}`:
 

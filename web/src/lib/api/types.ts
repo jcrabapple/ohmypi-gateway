@@ -98,9 +98,36 @@ export interface SavedSession {
   running: boolean;
 }
 
+/** One omp instance running outside this gateway, reported by GET /api/sessions. */
+export interface ExternalSession {
+  kind: 'external';
+  instanceId: string;
+  generation: number;
+  pid: number;
+  sessionId: string | null;
+  title: string | null;
+  cwd: string;
+  /** Null when the instance has not reported a model yet. */
+  model: { provider: string; id: string } | null;
+  /** Epoch ms. */
+  startedAt: number;
+  participants: number;
+  access: 'view' | 'control';
+  /** Null when the instance has not reported busy state. */
+  busy: boolean | null;
+  inputRequired: boolean;
+  /** Present when the instance is waiting on a blocking question. Epoch ms. */
+  ask: { requestId: string; since: number } | null;
+  /** Epoch ms of the last gateway contact. */
+  lastSeenAt: number;
+  stale: boolean;
+}
+
 export interface SessionsList {
   live: SessionInfo[];
   saved: SavedSession[];
+  /** Older gateways do not send it. */
+  external?: ExternalSession[];
 }
 
 /** GET /sessions/{id}/files?prefix= : one entry of the index-only cwd listing. */

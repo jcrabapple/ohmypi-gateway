@@ -195,33 +195,25 @@ def _send_one(sub: dict, payload: str) -> bool:
         raise
 
 
-async def push_dialog(gw_id: str, session_name: str | None, dialog: dict) -> int:
-    """Notify every subscribed device about a pending dialog. Returns the
-    number of devices reached. Never raises. All disk and network work runs in
-    worker threads (this is scheduled from the session dispatch path)."""
+async def _fan_out(payload: dict) -> int:
+    """Serialize one payload to JSON and deliver it to every subscribed
+    device. Returns the number of devices reached. Never raises. Per-device
+    sends run in worker threads (one hanging push service must not delay the
+    others) and dead subscriptions (endpoint gone, 404/410) are pruned."""
     subs = await asyncio.to_thread(_load_subs)
     if not subs:
         return 0
-    method = dialog.get("method") or "dialog"
-    title = (dialog.get("title") or "omp needs you").strip().splitlines()[0][:120]
-    body = f"{session_name or gw_id}: a {method} dialog is waiting for an answer"
-    payload = json.dumps({
-        "gwId": gw_id,
-        "title": "omp needs you",
-        "body": f"{title} - {body}"[:280],
-        "tag": f"omp-dialog-{gw_id}-{dialog.get('id')}",
-        "url": f"/#/s/{gw_id}",
-    })
+    body = json.dumps(payload)
 
     async def one(sub: dict) -> tuple[str, bool | None]:
         # True delivered, False gone (prune), None transient failure.
         try:
-            return sub["endpoint"], await asyncio.to_thread(_send_one, sub, payload)
+            return sub["endpoint"], await asyncio.to_thread(_send_one, sub, body)
         except Exception as e:
-            log.warning("[%s] push to %s... failed: %s", gw_id, sub["endpoint"][:48], e)
+            log.warning("[%s] push to %s... failed: %s", payload.get("tag", "?"),
+                        sub["endpoint"][:48], e)
             return sub["endpoint"], None
 
-    # Fan out: one hanging push service must not delay the other devices.
     results = await asyncio.gather(*(one(s) for s in subs))
     delivered = sum(1 for _, ok in results if ok is True)
     gone = [ep for ep, ok in results if ok is False]
@@ -231,7 +223,35 @@ async def push_dialog(gw_id: str, session_name: str | None, dialog: dict) -> int
                 keep = [s for s in _load_subs() if s.get("endpoint") not in set(gone)]
                 _save_subs(keep)
         await asyncio.to_thread(prune)
-        log.info("[%s] pruned %d dead push subscription(s)", gw_id, len(gone))
+        log.info("[%s] pruned %d dead push subscription(s)", payload.get("tag", "?"), len(gone))
     if delivered:
-        log.info("[%s] pushed dialog to %d device(s)", gw_id, delivered)
+        log.info("[%s] pushed to %d device(s)", payload.get("tag", "?"), delivered)
     return delivered
+
+
+async def push_dialog(gw_id: str, session_name: str | None, dialog: dict) -> int:
+    """Notify every subscribed device about a pending dialog. Returns the
+    number of devices reached. Never raises."""
+    method = dialog.get("method") or "dialog"
+    title = (dialog.get("title") or "omp needs you").strip().splitlines()[0][:120]
+    body = f"{session_name or gw_id}: a {method} dialog is waiting for an answer"
+    payload = {
+        "gwId": gw_id,
+        "title": "omp needs you",
+        "body": f"{title} - {body}"[:280],
+        "tag": f"omp-dialog-{gw_id}-{dialog.get('id')}",
+        "url": f"/#/s/{gw_id}",
+    }
+    return await _fan_out(payload)
+
+
+async def push_attention(instance_id: str, label: str, request_id: str) -> int:
+    """Notify every subscribed device that an external omp collab host is
+    waiting for input. Returns the number of devices reached. Never raises."""
+    payload = {
+        "title": "omp needs you",
+        "body": f"{label} is waiting for input"[:280],
+        "tag": f"omp-attention-{instance_id}-{request_id}",
+        "url": "/",
+    }
+    return await _fan_out(payload)

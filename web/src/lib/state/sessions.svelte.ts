@@ -1,6 +1,6 @@
 import { isAbortError } from '../api/client';
 import { sessions as sessionsApi } from '../api/endpoints';
-import type { SavedSession, SessionInfo } from '../api/types';
+import type { ExternalSession, SavedSession, SessionInfo } from '../api/types';
 import { device } from '../platform/storage';
 import { cacheKey, idbGet, idbSet } from '../platform/idb';
 import { active } from './active.svelte';
@@ -31,6 +31,7 @@ const TODO_FRESH_MS = 15_000;
 class SessionsStore {
   live = $state<SessionInfo[]>([]);
   saved = $state<SavedSession[]>([]);
+  external = $state<ExternalSession[]>([]);
   /** False until the first list (cached or fresh) arrives, so the rail can show skeletons. */
   loaded = $state(false);
   error = $state<string | null>(null);
@@ -41,7 +42,10 @@ class SessionsStore {
   /** Last time each session's /state confirmed its todo state; entries go stale without refreshes. */
   private lastTodoRefresh = new Map<string, number>();
   groups = $derived(
-    groupSessions(this.live, this.saved, Date.now(), this.todoActive, reviewed.needsReview, pins.files, folderFilter.hidden),
+    groupSessions(
+      this.live, this.saved, Date.now(), this.todoActive, reviewed.needsReview, pins.files,
+      folderFilter.hidden, this.external,
+    ),
   );
 
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -74,6 +78,7 @@ class SessionsStore {
       const list = await sessionsApi.list(60, ctl.signal);
       this.live = list.live;
       this.saved = list.saved;
+      this.external = list.external ?? [];
       this.error = null;
       this.loaded = true;
       this.expireTodoStale();
@@ -144,10 +149,12 @@ class SessionsStore {
   }
 
   private async paintCached(): Promise<void> {
-    const cached = await idbGet<{ live: SessionInfo[]; saved: SavedSession[] }>(CACHE_KEY);
+    const cached = await idbGet<{ live: SessionInfo[]; saved: SavedSession[]; external?: ExternalSession[] }>(CACHE_KEY);
     if (!cached || this.loaded) return;
     this.live = cached.live;
     this.saved = cached.saved;
+    // An old cache may not carry external rows at all; trust only arrays.
+    this.external = Array.isArray(cached.external) ? cached.external : [];
     this.loaded = true;
   }
 
