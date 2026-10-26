@@ -229,7 +229,12 @@ class Discovery:
             signature = f"{type(exc).__name__}:{exc.errno}"
             if signature != self._last_list_error:
                 self._last_list_error = signature
-                log.warning("collab discovery dir unreadable: %s", exc)
+                if isinstance(exc, (FileNotFoundError, NotADirectoryError)):
+                    # Nothing has published yet (collab off, or no interactive
+                    # session has started): the normal empty state, not a fault.
+                    log.debug("collab discovery dir absent: %s", exc)
+                else:
+                    log.warning("collab discovery dir unreadable: %s", exc)
             return
         if self._last_list_error is not None:
             log.info("collab discovery dir readable again")

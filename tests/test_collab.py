@@ -454,6 +454,14 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         finally:
             srv.close()
 
+    async def test_absent_directory_is_quiet(self):
+        """No published hosts (collab off) is the normal empty state: no rows,
+        no warning, and no state left behind that would suppress a real one."""
+        d = collab.Discovery(self.dir / "does-not-exist", clock=self.clock)
+        with self.assertNoLogs("gateway.collab", level="WARNING"):
+            await d.poll_once()
+        self.assertEqual(d.snapshot(), [])
+
     async def test_stalled_host_times_out_instead_of_hanging_the_round(self):
         """A socket that accepts, reads the request and never answers must not
         hang poll_once: the deadline has to cover the read, not just connect."""
