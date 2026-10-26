@@ -539,6 +539,42 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         finally:
             srv.close()
 
+    async def test_fresh_host_admitted_when_the_cap_is_saturated(self):
+        """A full cap of long-lived tracked hosts must not starve a brand new
+        session off the rail: a few slots stay reserved for unseen entries."""
+        by_endpoint: dict[str, str] = {}
+
+        async def fake_query(endpoint, payload):
+            return {"ok": True, "v": 1, "snapshot": _snap(
+                instanceId=by_endpoint[endpoint])}
+
+        from unittest import mock
+        with mock.patch.object(collab, "_query", fake_query):
+            for i in range(collab.MAX_ENTRIES):
+                sock = str(self.dir / f"k{i:02d}.sock")
+                iid = f"k{i:02d}"
+                by_endpoint[sock] = iid
+                self.write_entry(f"k{i:02d}.json", iid, sock)
+            d = self.make()
+            await d.poll_once()
+            self.assertEqual(len(d.snapshot()), collab.MAX_ENTRIES)
+
+            # A session started now, with every slot already taken by hosts
+            # that keep answering (so TTL never frees one).
+            sock = str(self.dir / "new.sock")
+            by_endpoint[sock] = "zz-new"
+            self.write_entry("new.json", "zz-new", sock, mtime=9999)
+            await d.poll_once()
+            rows = d.snapshot()
+            ids = [r["instanceId"] for r in rows]
+            self.assertIn("zz-new", ids)
+            # The cap bounds how many hosts are QUERIED per round. A tracked
+            # host squeezed out of this round may linger stale until TTL (its
+            # entry file still exists), so only fresh rows are capped.
+            self.assertLessEqual(sum(1 for r in rows if not r["stale"]),
+                                 collab.MAX_ENTRIES)
+            self.assertTrue(any(r["stale"] for r in rows))
+
     async def test_last_seen_is_last_success_not_now(self):
         s = str(self.dir / "a.sock")
         srv, _ = await self.serve([{"ok": True, "v": 1, "snapshot": _snap(

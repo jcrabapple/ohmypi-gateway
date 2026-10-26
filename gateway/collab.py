@@ -36,6 +36,11 @@ POLL_S = float(os.environ.get("OMPGW_COLLAB_POLL_S", "10"))
 TTL_S = max(3 * POLL_S, 35.0)
 QUERY_TIMEOUT_S = 1.5
 MAX_ENTRIES = 32
+# Slots held open for hosts we have never seen. Without them, a full cap of
+# long-lived tracked hosts would fill every slot with known entries and starve
+# a newly started session indefinitely (tracked hosts refresh last_ok forever,
+# so TTL never frees their slot).
+FRESH_SLOTS = 4
 MAX_TITLE = 120
 MAX_RESPONSE_BYTES = 64 * 1024
 
@@ -238,10 +243,13 @@ class Discovery:
                 seen[iid] = (p, e)
         valid = list(seen.values())
         # Hosts we already track are queried first, so a busy directory cannot
-        # evict a long-running session just because its entry file is old.
+        # evict a long-running session just because its entry file is old. A
+        # few slots stay reserved for unseen hosts, otherwise a saturated cap
+        # of long-lived sessions would keep new ones off the rail forever.
         known = [x for x in valid if x[1]["instanceId"] in self._hosts]
         fresh = [x for x in valid if x[1]["instanceId"] not in self._hosts]
-        valid = (known + fresh)[:MAX_ENTRIES]
+        reserved = min(len(fresh), FRESH_SLOTS)
+        valid = (known[:MAX_ENTRIES - reserved] + fresh[:MAX_ENTRIES])[:MAX_ENTRIES]
         for p, e in valid:
             self._paths[e["instanceId"]] = p
         self._mints = []
@@ -374,7 +382,10 @@ class Discovery:
                 "inputRequired": bool(vs.get("inputRequired")),
                 "ask": dict(host.ask) if host.ask else None,
                 # Last SUCCESSFUL observation, not "now": a stale row must not
-                # advertise a fresh last-seen time (docs/API.md).
+                # advertise a fresh last-seen time (docs/API.md). The born_ms
+                # fallback is unreachable today (a row only exists once
+                # _apply set both snapshot and last_seen_ms); it stays as a
+                # guard so a future non-snapshot row cannot emit 0.
                 "lastSeenAt": host.last_seen_ms or host.born_ms,
                 "stale": host.stale,
             }
