@@ -112,6 +112,20 @@ cd web && bun run check && bun run test && bun run build
 `e2e.py` creates and deletes real sessions, so point it at a scratch gateway instance, not one
 you are using.
 
+## Deploying a change
+
+```sh
+scripts/deploy.sh --dry-run     # what would happen
+scripts/deploy.sh               # restart and verify
+scripts/deploy.sh --build       # build web/dist first if it is stale
+```
+
+The script refuses to restart when the built client is older than `web/src` (a restart serves
+whatever is in `web/dist`, which is not in git), refuses when live sessions would be killed
+unless you pass `--force`, and then polls `/api/health` until it reports the `VERSION` in
+`gateway/main.py`. Overrides: `OMPGW_UNIT`, `OMPGW_URL`, `OMPGW_DIST_DIR`,
+`OMPGW_HEALTH_TIMEOUT`.
+
 ## Security model
 
 Whoever holds the token can run a coding agent with shell access on the host, and new sessions

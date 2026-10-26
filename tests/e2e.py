@@ -380,14 +380,25 @@ try:
     check("approval-answered", code == 200)
     code, _, _ = req("POST", f"/api/sessions/{aid}/ui/{pend[0]['id']}", {"value": "Approve"})
     check("approval-double-answer-409", code == 409)
-    for _ in range(90):
-        if not ok("GET", f"/api/sessions/{aid}")["isStreaming"]:
+    # Wait for the event itself, not for isStreaming to clear. The old version
+    # read the event list the instant the turn stopped streaming and lost the
+    # race: omp can append tool_execution_end a beat after agent_end, which made
+    # this check fail intermittently. A bounded wait on the fact we assert is
+    # both faster on the happy path and honest when the tool never ran.
+    ran: list[dict] = []
+    evs: list[dict] = []
+    deadline = _t.time() + 90
+    while _t.time() < deadline:
+        evs = [e["event"] for e in ok("GET", f"/api/sessions/{aid}/events")["events"]]
+        ran = [e for e in evs if e.get("type") == "tool_execution_end"
+               and "gw-approval-probe" in json.dumps(e.get("result"))]
+        if ran:
             break
-        _t.sleep(1)
-    evs = [e["event"] for e in ok("GET", f"/api/sessions/{aid}/events")["events"]]
-    ran = [e for e in evs if e.get("type") == "tool_execution_end" and "gw-approval-probe" in json.dumps(e.get("result"))]
-    check("approved-tool-ran", bool(ran) and not ran[0].get("isError"))
-    check("ui-resolved-event", any(e.get("type") == "ui_resolved" and e.get("id") == pend[0]["id"] for e in evs))
+        _t.sleep(2)
+    check("approved-tool-ran", bool(ran) and not ran[0].get("isError"),
+          "" if ran else "(no tool_execution_end with the probe text within 90s)")
+    check("ui-resolved-event", any(e.get("type") == "ui_resolved" and e.get("id") == pend[0]["id"]
+                                   for e in evs))
 finally:
     ok("DELETE", f"/api/sessions/{aid}")
 
