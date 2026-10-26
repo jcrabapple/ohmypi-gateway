@@ -126,12 +126,32 @@ class StatusEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(st["queryFailures"]), {"noReply", "gone", "osError"})
         self.assertIsInstance(st["polls"], int)
 
-    async def test_collab_status_counts_this_process(self):
+    async def test_collab_status_counts_a_real_poll(self):
+        """A round that actually queries hosts increments `polls`. Point the
+        singleton at a temp directory with one dead entry so the assertion does
+        not depend on this machine having a collab registry (CI has none, and
+        a round that skips an absent directory intentionally does not count)."""
+        import json
+        import tempfile
         from gateway.main import collab_status
         from gateway import collab as collab_mod
-        before = (await collab_status())["stats"]["polls"]
-        await collab_mod.get_discovery().poll_once()
-        after = (await collab_status())["stats"]["polls"]
+
+        d = collab_mod.get_discovery()
+        original = d.dir
+        with tempfile.TemporaryDirectory() as tmp:
+            entry = {"version": 1, "instanceId": "ci-probe", "pid": 1,
+                     "endpoint": str(f"{tmp}/gone.sock"), "createdAt": 1,
+                     "token": "t" * 64}
+            (Path(tmp) / "probe.json").write_text(json.dumps(entry))
+            d.dir = Path(tmp)
+            try:
+                before = (await collab_status())["stats"]["polls"]
+                await d.poll_once()
+                after = (await collab_status())["stats"]["polls"]
+            finally:
+                d.dir = original
+                d._hosts.clear()
+                d._paths.clear()
         self.assertGreaterEqual(after, before + 1)
 
 

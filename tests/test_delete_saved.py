@@ -1,13 +1,19 @@
 """Unit tests for DELETE /api/sessions/saved ordering: the running-session
 guard must fire (409) before the on-disk existence requirement, because omp
-reports the session file path before creating the file."""
+reports the session file path before creating the file.
+
+Run: .venv/bin/python tests/test_delete_saved.py
+"""
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from gateway import main
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from gateway import main  # noqa: E402
 
 
 class FakeManager:
