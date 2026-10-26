@@ -53,7 +53,7 @@ from .bridge import (
 from .fsbrowse import FsBrowseError, list_subdirs
 from .ledger import DEFAULT_DAYS, close_ledger, get_ledger
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PROJECT_DIR / "static"
 # Built web client. Served when WEB_DIST/index.html exists, else the Alpine dashboard.
