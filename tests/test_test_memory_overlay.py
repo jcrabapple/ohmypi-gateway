@@ -91,7 +91,7 @@ class BuildArgsTests(unittest.TestCase):
 
     def test_resume_keeps_overlay_and_resume_flag(self):
         s = self._session("/tmp/ompgw-e2e-xyz")
-        s.resume_session_file = "/home/jason/.omp/agent/sessions/x/y.jsonl"
+        s.resume_session_file = "/home/user/.omp/agent/sessions/x/y.jsonl"
         s.requested_model = "openrouter/z-ai/glm-5.3-flashx"
         args = s._build_args()
         self.assertIn("--config", args)

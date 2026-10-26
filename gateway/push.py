@@ -33,8 +33,10 @@ log = logging.getLogger("ohmpi-gateway.push")
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 VAPID_FILE = PROJECT_DIR / "push-vapid.json"
 SUBS_FILE = PROJECT_DIR / "push-subs.json"
-# The mailto in VAPID claims; push services require a contact URI.
-_VAPID_SUB = os.environ.get("OMPGW_VAPID_SUB", "mailto:jcrabapple@fastmail.us")
+# Contact URI for the VAPID `sub` claim (RFC 8292). Operators should set
+# OMPGW_VAPID_SUB to a mailbox they actually read; the default uses the
+# reserved `.invalid` TLD so a self-host does not advertise someone else.
+_VAPID_SUB = os.environ.get("OMPGW_VAPID_SUB", "mailto:omp-gateway@example.invalid")
 _SEND_TIMEOUT_S = 10
 
 webpush = None  # set by the import below; None means the feature is disabled

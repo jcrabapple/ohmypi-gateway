@@ -210,7 +210,7 @@ Public row shape (freeze this; both Wave 1 lanes code against it):
 
 ```json
 {"kind": "external", "instanceId": "73aed45bd8edc973", "generation": 1, "pid": 704319,
- "sessionId": "01a1...", "title": null, "cwd": "/var/home/jason/projects/x",
+ "sessionId": "01a1...", "title": null, "cwd": "/home/you/projects/x",
  "model": {"provider": "openrouter", "id": "z-ai/glm-5.3-flash"}, "startedAt": 1793016309423,
  "participants": 1, "access": "view", "busy": false, "inputRequired": true,
  "ask": {"requestId": "ab12cd34ef56", "since": 1793016400000},

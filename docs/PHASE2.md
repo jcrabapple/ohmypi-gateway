@@ -257,4 +257,4 @@ work later if trivial).
    todoPhases, states on the rail), then commit per task on
    `phase2` branch (cut from master at `a9b136f`).
 5. Ship: merge `phase2` -> `master`, build, restart `ohmpi-gateway` (check
-   live sessions first), run `tests/e2e.py https://omp.snakepit.us`.
+   live sessions first), run `tests/e2e.py https://gateway.example.com`.

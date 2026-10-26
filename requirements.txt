@@ -1,0 +1,8 @@
+# Runtime dependencies for ohmypi-gateway (Python 3.11+; developed on 3.14).
+fastapi==0.141.1
+uvicorn==0.54.0
+PyYAML==6.0.3
+
+# Optional: Web Push for "needs you" dialogs and collab attention asks.
+# Without it, push.available() reports False and every other feature runs.
+pywebpush==2.5.0
