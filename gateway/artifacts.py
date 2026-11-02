@@ -10,6 +10,7 @@ the file; uploads are capped and never overwrite unless asked.
 
 from __future__ import annotations
 
+import errno
 import mimetypes
 import os
 from pathlib import Path
@@ -58,7 +59,9 @@ def _reject_sensitive(path: Path) -> None:
     """Hidden directories and known secret files are out of scope for artifacts."""
     if any(part.startswith(".") for part in path.parts):
         raise ArtifactError("hidden files and folders are not served here", 403)
-    if path.name in _DENY_NAMES:
+    # Lowercased: a case-insensitive filesystem (or a hand-made id_RSA) must not
+    # find a way around the list.
+    if path.name.lower() in _DENY_NAMES:
         raise ArtifactError("that file is not served here", 403)
 
 
@@ -141,7 +144,7 @@ def safe_filename(name: str) -> str:
 def check_upload_name(filename: str) -> str:
     """Validate a leaf name without touching the filesystem or the body."""
     leaf = safe_filename(filename)
-    if leaf in _DENY_NAMES:
+    if leaf.lower() in _DENY_NAMES:
         raise ArtifactError("that file is not writable here", 403)
     return leaf
 
@@ -154,7 +157,7 @@ def save_upload(cwd: str, directory: str, filename: str, data: bytes,
     target_dir = resolve_dir(cwd, directory or "")
     leaf = safe_filename(filename)
     path = target_dir / leaf
-    if leaf in _DENY_NAMES:
+    if leaf.lower() in _DENY_NAMES:
         raise ArtifactError("that file is not writable here", 403)
     # One syscall carries the whole policy: O_NOFOLLOW refuses a symlink at the
     # name (dangling or not), O_EXCL refuses an existing file unless the caller
@@ -166,8 +169,10 @@ def save_upload(cwd: str, directory: str, filename: str, data: bytes,
     except FileExistsError:
         raise ArtifactError("a file with that name already exists", 409) from None
     except OSError as e:
-        if e.errno in (getattr(os, "ELOOP", 40), getattr(os, "EMLINK", 31)):
+        if e.errno in (errno.ELOOP, errno.EMLINK):
             raise ArtifactError("that name is a symlink", 403) from None
+        if e.errno == errno.EISDIR:
+            raise ArtifactError("a folder with that name is in the way", 409) from None
         raise ArtifactError(f"could not write the file: {e.strerror or e}", 500) from None
     try:
         with os.fdopen(fd, "wb") as fh:

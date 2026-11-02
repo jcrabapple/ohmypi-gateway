@@ -64,6 +64,14 @@ class ResolveFileTest(unittest.TestCase):
             artifacts.resolve_file(str(self.cwd), "keys/id_rsa")
         self.assertEqual(e.exception.status, 403)
 
+    def test_secret_names_are_matched_case_insensitively(self):
+        (self.cwd / "AUTH-TOKEN").write_text("secret")
+        (self.cwd / "id_RSA").write_text("key")
+        for probe in ("AUTH-TOKEN", "id_RSA"):
+            with self.subTest(probe=probe), self.assertRaises(ArtifactError) as e:
+                artifacts.resolve_file(str(self.cwd), probe)
+            self.assertEqual(e.exception.status, 403)
+
     def test_gateway_credentials_are_refused(self):
         (self.cwd / "auth-token").write_text("secret")
         with self.assertRaises(ArtifactError) as e:
@@ -139,6 +147,12 @@ class SaveUploadTest(unittest.TestCase):
             artifacts.save_upload(str(self.cwd), "hooks-link", "pre-commit", b"#!/bin/sh\n")
         self.assertEqual(e.exception.status, 403)
         self.assertFalse((self.cwd / ".git" / "hooks" / "pre-commit").exists())
+
+    def test_overwriting_a_folder_name_is_409_not_500(self):
+        (self.cwd / "taken.txt").mkdir()
+        with self.assertRaises(ArtifactError) as e:
+            artifacts.save_upload(str(self.cwd), "", "taken.txt", b"x", overwrite=True)
+        self.assertEqual(e.exception.status, 409)
 
     def test_check_upload_name_rejects_before_any_body(self):
         self.assertEqual(artifacts.check_upload_name("ok.txt"), "ok.txt")

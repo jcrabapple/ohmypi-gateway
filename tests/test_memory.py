@@ -177,6 +177,8 @@ class MemoryStoreTest(unittest.TestCase):
             {"title": "ok", "body": "x", "tags": ["a\ntier: hot"]},
             {"title": "ok", "body": "x", "tags": ["a,b"]},
             {"title": "ok", "body": "x", "links": ["skill:x\n---"]},
+            {"title": "Phase 1 --- Initial Design", "body": "x"},
+            {"title": "ok", "body": "x", "tags": ["a---b"]},
         )
         for case in cases:
             with self.subTest(case=case), self.assertRaises(MemoryError_) as e:

@@ -326,12 +326,18 @@ def save_note(*, nid: str | None = None, title: str, tags: list[str] | None = No
     # keys or close the block early, and a comma would split one tag into two.
     if "\n" in title or "\r" in title:
         raise MemoryError_("a title cannot contain line breaks", 422)
+    # The indexer parses this file with split("---", 2), so a fence inside a
+    # field desyncs the note from graph.db. The reader below is deliberately more
+    # tolerant (line-anchored) so legacy notes still open; writers stay strict.
+    if "---" in title:
+        raise MemoryError_("a title cannot contain '---' (the store's fence)", 422)
     tags = [t.strip() for t in (tags or []) if isinstance(t, str) and t.strip()][:20]
     links = [l.strip() for l in (links or []) if isinstance(l, str) and l.strip()][:40]
     for field_name, values in (("tag", tags), ("link", links)):
         for value in values:
-            if "\n" in value or "\r" in value or "," in value:
-                raise MemoryError_(f"a {field_name} cannot contain line breaks or commas", 422)
+            if "\n" in value or "\r" in value or "," in value or "---" in value:
+                raise MemoryError_(
+                    f"a {field_name} cannot contain line breaks, commas or '---'", 422)
 
     created = False
     if nid:

@@ -566,6 +566,12 @@ try:
         # Refused on the resolved target, not on the link's own name.
         code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=innocent.txt")
         check("file-download-refuses-symlinked-secret", code == 403, f"-> {code}")
+        (fdir / "AUTH-TOKEN").write_text("secret")
+        try:
+            code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=AUTH-TOKEN")
+            check("file-download-refuses-secret-case-variant", code == 403, f"-> {code}")
+        finally:
+            (fdir / "AUTH-TOKEN").unlink(missing_ok=True)
     finally:
         (fdir / "innocent.txt").unlink(missing_ok=True)
         (fdir / "auth-token").unlink(missing_ok=True)
