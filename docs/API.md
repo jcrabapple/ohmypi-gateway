@@ -144,26 +144,42 @@ provider and model are stored per turn.
 | GET | `/ledger?days=&model=&provider=` | aggregates over the last `days` local calendar days (1..365, default 30); `model` accepts the bare model name or `provider/model`, `provider` is exact: `{days, totals: {turns, turnsOk, input, output, cacheRead, cacheWrite, cost}, perDay: [{date, input, output, cost}], perModel: [{provider, model, turns, input, output, cacheRead, cost}]}`. `perDay` is always exactly `days` entries, keyed by ISO date in the gateway's timezone, zero-filled, oldest first, so chart bars sum to the totals. Costs are raw sums of per-turn USD floats; clients round for display |
 | GET | `/ledger/sessions?days=` | per-session rollup (grouped by session name + cwd), newest activity first: `{days, sessions: [{sessionName, cwd, turns, input, output, cacheRead, cost, lastTs}]}` |
 
-### Web push ("needs you")
+### Web push ("needs you", and turns that end)
 
-When a blocking dialog (tool approval, question) becomes pending on a session
-that NO WebSocket client is watching, the gateway pushes every registered
-device. One push per dialog. Pushes require the `pywebpush` package in the
-venv: without it `GET /push/vapid` and `POST /push/subscribe` answer 503
-(`POST /push/unsubscribe` still works - it only edits the local store) and the
-rest of the gateway is unaffected. VAPID keys are generated on first use and
-stored at `push-vapid.json` (created 0600, atomically) next to `auth-token`;
-device subscriptions at `push-subs.json` (also 0600). `keys.p256dh` must be a
-65-byte uncompressed P-256 point and `keys.auth` a 16-32 byte secret, both
-base64url - malformed keys are 422, never stored. Endpoints that answer
-404/410 are pruned on the next send. The notification deep-links to
-`/#/s/{gwId}`. iOS only delivers web push to the installed PWA.
+When a blocking dialog (tool approval, question) becomes pending, or a turn
+ends, on a session that NO WebSocket client is watching, the gateway pushes
+every registered device. One push per dialog; one per session for a turn end
+(a later turn replaces the earlier notification instead of stacking). A
+deliberate abort never pushes, and a queued follow-up defers the push until
+the last turn in the queue ends.
+
+Which kinds push is a per-gateway policy stored at `push-prefs.json` (created
+0600, atomically; read-only to the browser through the API): `completion` (a
+turn that ended on its own, on by default), `error` (a turn whose status was a
+failure, off by default; the body carries omp's `errorMessage`), and `ask`
+(dialogs and external sessions waiting for input, on by default).
+
+Pushes require the `pywebpush` package in the venv: without it `GET
+/push/vapid` and `POST /push/subscribe` answer 503 (`POST /push/unsubscribe`
+still works - it only edits the local store) and the rest of the gateway is
+unaffected. VAPID keys are generated on first use and stored at
+`push-vapid.json` (created 0600, atomically) next to `auth-token`; device
+subscriptions at `push-subs.json` (also 0600). `keys.p256dh` must be a 65-byte
+uncompressed P-256 point and `keys.auth` a 16-32 byte secret, both base64url -
+malformed keys are 422, never stored. Endpoints that answer 404/410 are pruned
+on the next send. The notification payload carries `kind` (`ask`,
+`completion` or `error`) so the service worker keeps a dialog pinned on screen
+while letting a turn-end notification go, plus `gwId`, `title`, `body`, `tag`
+and a `url` that deep-links to `/#/s/{gwId}`. iOS only delivers web push to
+the installed PWA.
 
 | Method | Path | |
 |---|---|---|
 | GET | `/push/vapid` | `{publicKey}`: base64url uncompressed P-256 point, passed as `applicationServerKey` to `pushManager.subscribe({userVisibleOnly: true})` |
 | POST | `/push/subscribe` | register a device: `{endpoint, keys: {p256dh, auth}}` (the browser PushSubscription, as JSON). Idempotent per endpoint; `-> {ok, subscriptions}`. Non-https endpoint or missing keys 422 |
 | POST | `/push/unsubscribe` | remove a device: `{endpoint}`; `-> {ok, subscriptions}` |
+| GET | `/push/prefs` | `{prefs: {completion, error, ask}}`, each a boolean |
+| PUT | `/push/prefs` | partial update: any of `completion`, `error`, `ask` as booleans; omitted kinds keep their value; `-> {prefs}`. Unknown kind or non-boolean 422 |
 
 ### Cross-session search
 

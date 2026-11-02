@@ -515,6 +515,27 @@ async def push_unsubscribe(request: Request):
     return {"ok": True, "subscriptions": push_mod.unsubscribe(endpoint)}
 
 
+@app.get("/api/push/prefs")
+async def push_prefs():
+    """Notification policy for every subscribed device: which turn ends and
+    dialogs push. Works without pywebpush installed; nothing is sent then."""
+    from . import push as push_mod
+    return {"prefs": push_mod.load_prefs()}
+
+
+@app.put("/api/push/prefs")
+async def push_prefs_update(request: Request):
+    """Set one or more notification kinds; kinds omitted from the body keep
+    their stored value. `{completion, error, ask}`, each a boolean."""
+    from . import push as push_mod
+    body = await json_body(request)
+    try:
+        prefs = push_mod.save_prefs(body)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"prefs": prefs}
+
+
 def _restore_archived(archived_path: Path) -> Path:
     """Copy a gzipped (or plain) archived transcript into the live sessions
     dir so it becomes a normal resumable file. Exact-name reuse: a second

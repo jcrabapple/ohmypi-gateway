@@ -33,6 +33,15 @@ log = logging.getLogger("ohmpi-gateway.push")
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 VAPID_FILE = PROJECT_DIR / "push-vapid.json"
 SUBS_FILE = PROJECT_DIR / "push-subs.json"
+PREFS_FILE = PROJECT_DIR / "push-prefs.json"
+# Which events push, for every subscribed device. `ask` covers blocking
+# dialogs and external collab hosts waiting for input; `completion` a turn
+# that ended on its own; `error` a turn whose prompt_result status was a
+# failure. Defaults mirror the omp TUI (completion and ask on, error off).
+PREF_KINDS = ("completion", "error", "ask")
+DEFAULT_PREFS: dict[str, bool] = {"completion": True, "error": False, "ask": True}
+# Longest error excerpt carried in a turn-end body.
+_TURN_DETAIL_MAX = 120
 # Contact URI for the VAPID `sub` claim (RFC 8292). Operators should set
 # OMPGW_VAPID_SUB to a mailbox they actually read; the default uses the
 # reserved `.invalid` TLD so a self-host does not advertise someone else.
@@ -176,6 +185,47 @@ def subscription_count() -> int:
     return len(_load_subs())
 
 
+# -------------------------------------------------------------- preferences
+
+def load_prefs() -> dict[str, bool]:
+    """Notification policy: stored choices over the defaults. A missing,
+    unreadable or malformed file reads as the defaults, and a non-boolean or
+    unknown key in the file is ignored, so a hand-edited file can never turn
+    a push kind into something that is neither on nor off."""
+    prefs = dict(DEFAULT_PREFS)
+    try:
+        data = json.loads(PREFS_FILE.read_text())
+    except FileNotFoundError:
+        return prefs
+    except (json.JSONDecodeError, OSError):
+        log.warning("push preferences unreadable; using defaults")
+        return prefs
+    if isinstance(data, dict):
+        for kind in PREF_KINDS:
+            value = data.get(kind)
+            if isinstance(value, bool):
+                prefs[kind] = value
+    return prefs
+
+
+def save_prefs(patch: Any) -> dict[str, bool]:
+    """Apply a partial policy update and persist it. Raises ValueError on an
+    unknown kind, a non-boolean value or an empty body."""
+    if not isinstance(patch, dict) or not patch:
+        raise ValueError("body must be a non-empty object of kind -> boolean")
+    unknown = sorted(set(patch) - set(PREF_KINDS))
+    if unknown:
+        raise ValueError(f"unknown notification kind: {unknown[0]}")
+    for kind, value in patch.items():
+        if not isinstance(value, bool):
+            raise ValueError(f"{kind} must be true or false")
+    with _lock:
+        prefs = load_prefs()
+        prefs.update(patch)
+        _write_private(PREFS_FILE, json.dumps(prefs, indent=1))
+    return prefs
+
+
 # --------------------------------------------------------------------- sends
 
 def _send_one(sub: dict, payload: str) -> bool:
@@ -234,10 +284,13 @@ async def _fan_out(payload: dict) -> int:
 async def push_dialog(gw_id: str, session_name: str | None, dialog: dict) -> int:
     """Notify every subscribed device about a pending dialog. Returns the
     number of devices reached. Never raises."""
+    if not load_prefs()["ask"]:
+        return 0
     method = dialog.get("method") or "dialog"
     title = (dialog.get("title") or "omp needs you").strip().splitlines()[0][:120]
     body = f"{session_name or gw_id}: a {method} dialog is waiting for an answer"
     payload = {
+        "kind": "ask",
         "gwId": gw_id,
         "title": "omp needs you",
         "body": f"{title} - {body}"[:280],
@@ -250,10 +303,43 @@ async def push_dialog(gw_id: str, session_name: str | None, dialog: dict) -> int
 async def push_attention(instance_id: str, label: str, request_id: str) -> int:
     """Notify every subscribed device that an external omp collab host is
     waiting for input. Returns the number of devices reached. Never raises."""
+    if not load_prefs()["ask"]:
+        return 0
     payload = {
+        "kind": "ask",
         "title": "omp needs you",
         "body": f"{label} is waiting for input"[:280],
         "tag": f"omp-attention-{instance_id}-{request_id}",
         "url": "/",
+    }
+    return await _fan_out(payload)
+
+
+async def push_turn(gw_id: str, session_name: str | None,
+                    outcome: str, detail: str | None = None) -> int:
+    """Notify every subscribed device that an unattended turn ended.
+    `outcome` is "complete" or "error"; a failed turn carries omp's error
+    message as `detail`. Returns the number of devices reached. Never raises.
+
+    One notification per session (`tag`): a later turn replaces the earlier
+    one instead of stacking, and both purposes deep-link to the session."""
+    kind = "error" if outcome == "error" else "completion"
+    if not load_prefs()[kind]:
+        return 0
+    name = (session_name or "").strip() or gw_id
+    if kind == "error":
+        tail = (detail or "").strip().splitlines()[0][:_TURN_DETAIL_MAX] if detail else ""
+        payload_title = "omp stopped with an error"
+        body = f"{name}: stopped with error" + (f": {tail}" if tail else "")
+    else:
+        payload_title = "omp finished"
+        body = f"{name}: turn complete"
+    payload = {
+        "kind": kind,
+        "gwId": gw_id,
+        "title": payload_title,
+        "body": body[:280],
+        "tag": f"omp-turn-{gw_id}",
+        "url": f"/#/s/{gw_id}",
     }
     return await _fan_out(payload)

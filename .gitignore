@@ -5,6 +5,7 @@ auth-token
 gateway.env
 push-vapid.json
 push-subs.json
+push-prefs.json
 search-index.db
 search-index.db-wal
 search-index.db-shm

@@ -56,9 +56,10 @@ self.addEventListener('fetch', (event) => {
   else if (kind === 'asset') event.respondWith(cacheFirst(req));
 });
 
-// Web Push: "needs you". The gateway only pushes when no client is watching
-// the session, so showing the notification unconditionally is safe (a push
-// may also arrive while the page is open, after the watcher left mid-flight).
+// Web Push: "needs you" and "your turn ended". The gateway only pushes when
+// no client is watching the session, so showing the notification
+// unconditionally is safe (a push may also arrive while the page is open,
+// after the watcher left mid-flight).
 self.addEventListener('push', (event) => {
   let payload = {};
   try {
@@ -67,6 +68,10 @@ self.addEventListener('push', (event) => {
     payload = { title: 'omp', body: event.data ? event.data.text() : '' };
   }
   const data = { url: payload.url || '/#/usage', gwId: payload.gwId || null };
+  // A turn ending is ambient: it may be dismissed by the next one, so it does
+  // not pin itself to the screen. A dialog is exactly the thing worth being
+  // noisy about, so it stays until answered.
+  const turnEnded = payload.kind === 'completion' || payload.kind === 'error';
   event.waitUntil(
     self.registration.showNotification(payload.title || 'omp', {
       body: payload.body || '',
@@ -74,9 +79,7 @@ self.addEventListener('push', (event) => {
       data,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
-      // Keep the notification on screen until answered; a dialog nobody
-      // dismisses is exactly the thing worth being noisy about.
-      requireInteraction: true,
+      requireInteraction: !turnEnded,
     }),
   );
 });

@@ -40,6 +40,7 @@ class PushTest(unittest.IsolatedAsyncioTestCase):
         self.patchers = [
             mock.patch.object(push_mod, "VAPID_FILE", Path(self.tmp.name) / "vapid.json"),
             mock.patch.object(push_mod, "SUBS_FILE", Path(self.tmp.name) / "subs.json"),
+            mock.patch.object(push_mod, "PREFS_FILE", Path(self.tmp.name) / "prefs.json"),
             mock.patch.object(push_mod, "_vapid", None),
         ]
         for p in self.patchers:
@@ -136,6 +137,143 @@ class PushTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertIsInstance(seen["vapid_private_key"], push_mod.Vapid)
         self.assertIn("sub", seen["vapid_claims"])
+
+    # --- notification policy -------------------------------------------
+
+    def test_prefs_default_when_missing(self):
+        self.assertEqual(push_mod.load_prefs(),
+                         {"completion": True, "error": False, "ask": True})
+
+    def test_save_prefs_partial_and_private(self):
+        prefs = push_mod.save_prefs({"error": True})
+        self.assertTrue(prefs["error"])
+        self.assertTrue(prefs["completion"])  # untouched kinds keep their value
+        self.assertTrue(push_mod.load_prefs()["error"])
+        self.assertEqual(push_mod.PREFS_FILE.stat().st_mode & 0o777, 0o600)
+
+    def test_save_prefs_rejects_bad_input(self):
+        for body in ({}, {"bogus": True}, {"completion": "yes"}, {"completion": 1}, []):
+            with self.assertRaises(ValueError):
+                push_mod.save_prefs(body)
+
+    def test_load_prefs_ignores_malformed_file(self):
+        push_mod.PREFS_FILE.write_text(
+            json.dumps({"completion": "no", "error": True, "extra": True}))
+        self.assertEqual(push_mod.load_prefs(),
+                         {"completion": True, "error": True, "ask": True})
+        push_mod.PREFS_FILE.write_text("{not json")
+        self.assertTrue(push_mod.load_prefs()["completion"])
+
+    async def test_turn_push_payload(self):
+        push_mod.subscribe(**SUB)
+        sends: list = []
+        with mock.patch.object(push_mod, "_send_one",
+                               lambda sub, payload: sends.append(json.loads(payload)) or True):
+            delivered = await push_mod.push_turn("gwt", "my session", "complete")
+        self.assertEqual(delivered, 1)
+        payload = sends[0]
+        self.assertEqual(payload["kind"], "completion")
+        self.assertEqual(payload["gwId"], "gwt")
+        self.assertEqual(payload["tag"], "omp-turn-gwt")
+        self.assertIn("#/s/gwt", payload["url"])
+        self.assertIn("my session", payload["body"])
+
+    async def test_turn_push_error_carries_detail_only_when_enabled(self):
+        push_mod.subscribe(**SUB)
+        sends: list = []
+        with mock.patch.object(push_mod, "_send_one",
+                               lambda sub, payload: sends.append(json.loads(payload)) or True):
+            # error pushes are off by default
+            self.assertEqual(await push_mod.push_turn("gwt", "s", "error", "boom"), 0)
+            push_mod.save_prefs({"error": True})
+            self.assertEqual(
+                await push_mod.push_turn("gwt", "s", "error", "boom\ntrace"), 1)
+        self.assertEqual(sends[0]["kind"], "error")
+        self.assertIn("boom", sends[0]["body"])
+        self.assertNotIn("\n", sends[0]["body"])
+
+    async def test_completion_push_respects_policy(self):
+        push_mod.subscribe(**SUB)
+        push_mod.save_prefs({"completion": False})
+        sends: list = []
+        with mock.patch.object(push_mod, "_send_one",
+                               lambda sub, payload: sends.append(payload) or True):
+            self.assertEqual(await push_mod.push_turn("gwt", "s", "complete"), 0)
+        self.assertEqual(sends, [])
+
+    async def test_ask_policy_gates_dialog_pushes(self):
+        push_mod.subscribe(**SUB)
+        push_mod.save_prefs({"ask": False})
+        sends: list = []
+        self.assertEqual(await self._push(sends), 0)
+        self.assertEqual(sends, [])
+
+
+class BridgeTurnPushTest(unittest.IsolatedAsyncioTestCase):
+    """A turn that ends with nobody watching pushes once. An abort, a queued
+    follow-up that keeps the session busy, and a watcher all suppress it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="ompgw-push-turn-")
+        self.pushed: list[dict] = []
+
+        async def fake_push_turn(gw_id, session_name, outcome, detail=None):
+            self.pushed.append({"gwId": gw_id, "outcome": outcome, "detail": detail})
+            return 1
+
+        self.patches = [
+            mock.patch.object(push_mod, "push_turn", fake_push_turn),
+            mock.patch.dict(sys.modules, {"gateway.push": push_mod}),
+        ]
+        for p in self.patches:
+            p.start()
+
+    async def asyncSetUp(self):
+        self.sess = OmpSession(cwd=self.tmp.name)
+        # The queue head would otherwise start a real prompt against no child.
+        self.sess._maybe_fire_queue = mock.Mock()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    async def end_turn(self, status: str = "complete") -> None:
+        await self.sess._dispatch({"type": "prompt_result", "status": status})
+        await asyncio.sleep(0)  # let the push task run
+
+    async def test_complete_pushes_without_a_watcher(self):
+        await self.end_turn()
+        self.assertEqual(len(self.pushed), 1)
+        self.assertEqual(self.pushed[0]["outcome"], "complete")
+        self.assertEqual(self.pushed[0]["gwId"], self.sess.gw_id)
+
+    async def test_no_push_when_a_client_is_watching(self):
+        self.sess.subscribe()
+        await self.end_turn()
+        self.assertEqual(self.pushed, [])
+
+    async def test_abort_does_not_push(self):
+        await self.end_turn("aborted")
+        self.assertEqual(self.pushed, [])
+
+    async def test_error_push_carries_the_message(self):
+        await self.sess._dispatch({"type": "message_end", "message": {
+            "role": "assistant", "stopReason": "error", "errorMessage": "provider refused"}})
+        await self.end_turn("error")
+        self.assertEqual(len(self.pushed), 1)
+        self.assertEqual(self.pushed[0]["outcome"], "error")
+        self.assertEqual(self.pushed[0]["detail"], "provider refused")
+
+    async def test_queued_follow_up_defers_the_push(self):
+        self.sess.queue = [{"id": "q1", "message": "next", "images": None, "ts": 0}]
+        await self.end_turn()
+        self.assertEqual(self.pushed, [])
+
+    async def test_push_disabled_is_quiet(self):
+        with mock.patch.object(push_mod, "available", lambda: False):
+            await self.end_turn()
+        self.assertEqual(self.pushed, [])
 
 
 class BridgePushTriggerTest(unittest.IsolatedAsyncioTestCase):

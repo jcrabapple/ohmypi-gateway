@@ -177,6 +177,8 @@ class OmpSession:
         self._turn_acc: dict | None = None
         self._turn_failed = False
         self._turn_flushed = False
+        # omp's errorMessage for a failed turn, for the turn-end push body.
+        self._turn_error: str | None = None
         self._turn_flush_timer: asyncio.TimerHandle | None = None
         self._negotiation: asyncio.Task | None = None
         # Keep a reference: asyncio only keeps weak refs to tasks, an unreferenced
@@ -374,8 +376,14 @@ class OmpSession:
             msg = obj.get("message")
             if isinstance(msg, dict):
                 self._turn_accumulate(msg)
+                if msg.get("stopReason") == "error":
+                    message = msg.get("errorMessage")
+                    if isinstance(message, str) and message.strip():
+                        self._turn_error = message.strip()
         elif ftype == "prompt_result":
-            if obj.get("status") in _TURN_FAILURE_STATUSES:
+            status = obj.get("status") if isinstance(obj.get("status"), str) else ""
+            failed = status in _TURN_FAILURE_STATUSES
+            if failed:
                 self._turn_failed = True
             # prompt_result carries the turn's final status and follows
             # agent_end, so this is where the ledger row is written. acc is
@@ -386,8 +394,10 @@ class OmpSession:
             # A successful turn end is when a queued follow-up fires. Aborted
             # or failed turns keep the queue (the user can cancel or retry).
             self._turn_in_flight = False
-            if obj.get("status") not in _TURN_FAILURE_STATUSES:
+            continues = not failed and bool(self.queue)
+            if not failed:
                 self._maybe_fire_queue()
+            self._maybe_push_turn(status, continues)
         elif ftype == "agent_end":
             self.streaming = False
             if not self._turn_flushed:
@@ -469,6 +479,7 @@ class OmpSession:
         self._turn_acc = None
         self._turn_failed = False
         self._turn_flushed = False
+        self._turn_error = None
 
     def _turn_accumulate(self, msg: dict) -> None:
         """Sum one message's usage into the open turn. Ignores user echoes and
@@ -564,10 +575,29 @@ class OmpSession:
         task.add_done_callback(self._push_tasks.discard)
         task.add_done_callback(self._log_push_error)
 
+    def _maybe_push_turn(self, status: str, continues: bool) -> None:
+        """Web Push when an unattended turn ends: no WebSocket is watching,
+        the turn was not a deliberate abort, and no queued follow-up keeps the
+        session busy (the last turn in a queue is the one worth a push). The
+        notification kind and body come from `push.push_turn`; the policy
+        (`completion`/`error`) is applied there. Best effort: never raises."""
+        if self.subscribers or continues or status == "aborted":
+            return
+        from . import push as push_mod
+        if not push_mod.available():
+            return
+        outcome = "error" if status in _TURN_FAILURE_STATUSES else "complete"
+        task = asyncio.get_running_loop().create_task(
+            push_mod.push_turn(self.gw_id, self.omp_session_name, outcome,
+                               self._turn_error))
+        self._push_tasks.add(task)
+        task.add_done_callback(self._push_tasks.discard)
+        task.add_done_callback(self._log_push_error)
+
     @staticmethod
     def _log_push_error(task: asyncio.Task) -> None:
         if not task.cancelled() and task.exception() is not None:
-            log.warning("push_dialog task failed", exc_info=task.exception())
+            log.warning("push task failed", exc_info=task.exception())
 
     # ------------------------------------------------------- follow-up queue
 

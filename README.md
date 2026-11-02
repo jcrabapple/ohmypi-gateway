@@ -28,7 +28,7 @@ a rail, and a terminal session you started by hand appears next to the ones the 
 | Subagents | Progress frames and per-subagent transcripts. |
 | Usage | A turn-level ledger (tokens, cost, per model) plus search across live and archived transcripts. |
 | External sessions | Read-only rows for interactive `omp` sessions the gateway did not spawn, discovered from omp's collab registry. |
-| Push | Web Push for dialogs and for external sessions that start waiting on input. |
+| Push | Web Push when a dialog, a turn end (completion or error, per-kind policy) or an external session needs you while nobody is watching. |
 
 ## Requirements
 

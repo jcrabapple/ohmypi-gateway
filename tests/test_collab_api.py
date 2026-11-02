@@ -41,6 +41,7 @@ class PushTest(unittest.IsolatedAsyncioTestCase):
         self.patchers = [
             mock.patch.object(push_mod, "VAPID_FILE", Path(self.tmp.name) / "vapid.json"),
             mock.patch.object(push_mod, "SUBS_FILE", Path(self.tmp.name) / "subs.json"),
+            mock.patch.object(push_mod, "PREFS_FILE", Path(self.tmp.name) / "prefs.json"),
             mock.patch.object(push_mod, "_vapid", None),
         ]
         for p in self.patchers:

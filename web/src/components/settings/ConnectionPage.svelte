@@ -2,7 +2,14 @@
   import { onMount } from 'svelte';
   import { auth as authApi, host } from '../../lib/api/endpoints';
   import { uptime } from '../../lib/format';
-  import { disablePush, enablePush, pushStatus } from '../../lib/push/push';
+  import {
+    disablePush,
+    enablePush,
+    loadPushPrefs,
+    pushStatus,
+    savePushPrefs,
+    type PushPrefs,
+  } from '../../lib/push/push';
   import { auth } from '../../lib/state';
   import { Loader } from '../../lib/state/loader.svelte';
   import { confirm } from '../../lib/ui';
@@ -40,8 +47,56 @@ async function refreshPush(): Promise<void> {
   } catch {
     push = { state: 'unsupported', reason: 'Push status is unavailable.' };
   }
+  await refreshPrefs();
 }
 onMount(refreshPush);
+
+// What pushes, once this device is subscribed. The gateway decides whether to
+// send, so the choice applies to every subscribed device.
+const PUSH_PREF_ROWS = [
+  {
+    kind: 'completion' as const,
+    label: 'When a turn finishes',
+    hint: 'A turn ends while nobody is watching that session.',
+  },
+  {
+    kind: 'error' as const,
+    label: 'When a turn fails',
+    hint: 'omp reports an error instead of a normal end.',
+  },
+  {
+    kind: 'ask' as const,
+    label: 'When a session needs an answer',
+    hint: 'A tool approval or a question is blocking a turn.',
+  },
+];
+
+let prefs = $state<PushPrefs | null>(null);
+let prefsError = $state<string | null>(null);
+let prefsBusy = $state(false);
+
+async function refreshPrefs(): Promise<void> {
+  try {
+    prefs = await loadPushPrefs();
+    prefsError = null;
+  } catch (e) {
+    prefsError = e instanceof Error ? e.message : 'Could not load notification settings.';
+  }
+}
+
+async function setPref(kind: keyof PushPrefs, value: boolean): Promise<void> {
+  if (prefsBusy) return;
+  prefsBusy = true;
+  try {
+    prefs = await savePushPrefs({ [kind]: value } as Partial<PushPrefs>);
+    prefsError = null;
+  } catch (e) {
+    prefsError = e instanceof Error ? e.message : 'Could not save notification settings.';
+    await refreshPrefs();
+  } finally {
+    prefsBusy = false;
+  }
+}
 
 async function turnOn(): Promise<void> {
   if (push.busy) return;
@@ -99,7 +154,7 @@ async function turnOff(): Promise<void> {
 <Section
   id="push"
   title="Push notifications"
-  hint="Get notified when a session needs an answer and nobody is watching it. iOS needs the installed app."
+  hint="Get notified when a session needs an answer or a turn ends while nobody is watching it. iOS needs the installed app."
 >
   {#if push.state === 'checking'}
     <p class="push-note">Checking this device...</p>
@@ -114,6 +169,24 @@ async function turnOff(): Promise<void> {
     <p class="push-note">Off.</p>
     {#if push.error}<p class="push-note push-error" role="alert">{push.error}</p>{/if}
     <button type="button" class="btn" disabled={push.busy} onclick={turnOn}>{push.busy ? 'Working...' : 'Turn on'}</button>
+  {/if}
+  {#if push.state === 'on' || push.state === 'off'}
+    <fieldset class="prefs">
+      <legend>What pushes, once this device is subscribed</legend>
+      {#each PUSH_PREF_ROWS as row (row.kind)}
+        <label class="pref">
+          <input
+            type="checkbox"
+            checked={prefs ? prefs[row.kind] : false}
+            disabled={prefs === null || prefsBusy}
+            onchange={(e) => void setPref(row.kind, e.currentTarget.checked)}
+          />
+          <span class="pref-label">{row.label}</span>
+          <span class="pref-hint">{row.hint}</span>
+        </label>
+      {/each}
+    </fieldset>
+    {#if prefsError}<p class="push-note push-error" role="alert">{prefsError}</p>{/if}
   {/if}
 </Section>
 
@@ -137,6 +210,34 @@ async function turnOff(): Promise<void> {
   }
   .push-error {
     color: var(--ansi-1, #f87171);
+  }
+  .prefs {
+    display: grid;
+    gap: var(--s-3);
+    margin: 0 0 var(--s-4);
+    padding: 0;
+    border: 0;
+  }
+  .prefs legend {
+    padding: 0;
+    margin-bottom: var(--s-2);
+    color: var(--ink-3);
+    font-size: var(--fs-sm);
+  }
+  .pref {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--s-3);
+    align-items: baseline;
+    cursor: pointer;
+  }
+  .pref input {
+    margin: 0;
+  }
+  .pref-hint {
+    grid-column: 2;
+    color: var(--ink-3);
+    font-size: var(--fs-sm);
   }
   @media (max-width: 480px) {
     .grid {

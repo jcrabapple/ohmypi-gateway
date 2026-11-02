@@ -118,3 +118,54 @@ export async function disablePush(): Promise<void> {
     await sendToGateway('/api/push/unsubscribe', { endpoint }).catch(() => {});
   }
 }
+
+// --- notification policy ------------------------------------------------
+// Which events push at all. The gateway owns this (it decides whether to
+// send); every subscribed device sees the same answer.
+
+export interface PushPrefs {
+  /** A turn that ended on its own. */
+  completion: boolean;
+  /** A turn whose status was a failure. */
+  error: boolean;
+  /** A blocking dialog, or an external session waiting for input. */
+  ask: boolean;
+}
+
+const PREFS_ENDPOINT = '/api/push/prefs';
+
+// Mirrors the gateway's defaults (omp's TUI: completion and ask on, error off).
+const DEFAULT_PREFS: PushPrefs = { completion: true, error: false, ask: true };
+
+/** Server answer to a prefs call, normalized so a missing or odd field reads as its default. */
+function normalizePrefs(raw: unknown): PushPrefs {
+  const prefs = { ...DEFAULT_PREFS };
+  if (!raw || typeof raw !== 'object') return prefs;
+  const record = raw as Record<string, unknown>;
+  for (const kind of Object.keys(prefs) as (keyof PushPrefs)[]) {
+    const value = record[kind];
+    if (typeof value === 'boolean') prefs[kind] = value;
+  }
+  return prefs;
+}
+
+async function prefsRequest(init: RequestInit): Promise<PushPrefs> {
+  const res = await fetch(PREFS_ENDPOINT, { credentials: 'same-origin', ...init });
+  if (!res.ok) throw new Error(`gateway would not report notification settings (${res.status})`);
+  const data = (await res.json()) as { prefs?: unknown };
+  return normalizePrefs(data.prefs);
+}
+
+/** Read the stored policy. */
+export async function loadPushPrefs(): Promise<PushPrefs> {
+  return prefsRequest({ headers: { Accept: 'application/json' } });
+}
+
+/** Change one or more kinds; omitted kinds keep their stored value. */
+export async function savePushPrefs(patch: Partial<PushPrefs>): Promise<PushPrefs> {
+  return prefsRequest({
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+}
