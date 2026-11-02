@@ -48,6 +48,7 @@ def build_store(root: Path) -> None:
         conn.execute("INSERT INTO edges VALUES (?,?,?)", (nid, "tag:infra", "tagged"))
         conn.execute("INSERT INTO edges VALUES (?,?,?)", (nid, "skill:aurora", "references"))
     conn.execute("INSERT INTO nodes VALUES (?,?,?,?,?)", ("tag:infra", "tag", "infra", None, 1))
+    conn.execute("INSERT INTO nodes_fts VALUES (?,?,?)", ("skill:aurora", "aurora", "deploy aurora restic backup"))
     conn.execute("INSERT INTO nodes VALUES (?,?,?,?,?)", ("skill:aurora", "skill", "aurora", None, 1))
     conn.commit()
     conn.close()
@@ -83,6 +84,16 @@ class MemoryStoreTest(unittest.TestCase):
         self.assertEqual([r["id"] for r in res["notes"]], ["note-a"])
         self.assertEqual(res["notes"][0]["tier"], "hot")
         self.assertIn("restic", res["notes"][0]["snippet"])
+
+    def test_search_returns_notes_only(self):
+        # "restic" also matches the skill body; a /notes result the client cannot
+        # open is a bug, so only note rows come back.
+        res = memory.search("restic", 10, self.root)
+        self.assertEqual([r["id"] for r in res["notes"]], ["note-a"])
+        # "aurora" matches only the skill row, so the list is empty rather than
+        # offering a row that would 422 when opened.
+        res = memory.search("aurora", 10, self.root)
+        self.assertEqual(res["notes"], [])
 
     def test_search_empty_query_lists_notes(self):
         res = memory.search("", 10, self.root)
@@ -160,6 +171,27 @@ class MemoryStoreTest(unittest.TestCase):
         self.assertIn("updated body", text)
         self.assertNotIn("nightly", text)
 
+    def test_save_note_rejects_frontmatter_injection(self):
+        cases = (
+            {"title": "ok\nid: spoofed", "body": "x"},
+            {"title": "ok", "body": "x", "tags": ["a\ntier: hot"]},
+            {"title": "ok", "body": "x", "tags": ["a,b"]},
+            {"title": "ok", "body": "x", "links": ["skill:x\n---"]},
+        )
+        for case in cases:
+            with self.subTest(case=case), self.assertRaises(MemoryError_) as e:
+                memory.save_note(body="x", root=self.root, **{k: v for k, v in case.items() if k != "body"})
+            self.assertEqual(e.exception.status, 422)
+        # Nothing was written.
+        self.assertFalse((self.root / "notes" / "note-spoofed.md").exists())
+
+    def test_get_note_survives_a_broken_index(self):
+        (self.root / "graph.db").write_bytes(b"not a database")
+        note = memory.get_note("note-a", self.root)
+        self.assertEqual(note["title"], "Backup pipeline restic")
+        self.assertEqual(note["outgoing"], [])
+        self.assertEqual(note["tier"], "warm")
+
     def test_save_note_unknown_id_is_404(self):
         with self.assertRaises(MemoryError_) as e:
             memory.save_note(nid="note-ghost", title="t", body="b", root=self.root)
@@ -230,6 +262,15 @@ class EpisodicTest(unittest.TestCase):
     def test_limit_is_clamped(self):
         res = memory.episodic("", 999)
         self.assertTrue(len(res["rows"]) <= memory.MAX_EPISODIC)
+
+    def test_mixed_timestamp_types_do_not_crash_the_sort(self):
+        conn = sqlite3.connect(self.base / "banks" / "proj-abc" / "mnemopi.db")
+        conn.execute("INSERT INTO working_memory VALUES (?,?,?,?,?,?)",
+                     ("e4", "epoch timestamp row", "test", 1793586000, 0.5, "bank"))
+        conn.commit()
+        conn.close()
+        res = memory.episodic("", 10)
+        self.assertIn("e4", [r["id"] for r in res["rows"]])
 
     def test_missing_store_is_empty_not_an_error(self):
         os.environ["OMPGW_MNEMOPI_DIR"] = str(Path(self._tmp.name) / "absent")

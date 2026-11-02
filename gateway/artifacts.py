@@ -17,6 +17,16 @@ from pathlib import Path
 MAX_UPLOAD_BYTES = int(os.environ.get("OMPGW_MAX_UPLOAD_BYTES", str(32 * 1024 * 1024)))
 MAX_NAME = 200
 
+# The gateway's own credentials and the usual local secret files. The listing
+# already hides dotfiles, and a dot-directory is never an artifact: closing both
+# keeps this route from being a tidy way to pull auth-token or ~/.ssh out of a
+# session folder that happens to be a repo or a home directory.
+_DENY_NAMES = {
+    "auth-token", "gateway.env", "push-vapid.json", "push-subs.json",
+    "search-index.db", "id_rsa", "id_ed25519", "id_ecdsa",
+    ".env", ".netrc", ".git-credentials", ".pgpass",
+}
+
 # Extensions the browser should never render inline: these are downloads, not
 # a way to serve active content from the gateway origin.
 _HTML_LIKE = {".html", ".htm", ".xhtml", ".svg", ".xml", ".js", ".mjs"}
@@ -44,6 +54,14 @@ def _parts(rel: str) -> list[str]:
     return [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
 
 
+def _reject_sensitive(path: Path) -> None:
+    """Hidden directories and known secret files are out of scope for artifacts."""
+    if any(part.startswith(".") for part in path.parts):
+        raise ArtifactError("hidden files and folders are not served here", 403)
+    if path.name in _DENY_NAMES:
+        raise ArtifactError("that file is not served here", 403)
+
+
 def _inside(cwd_real: str, target: str) -> bool:
     # is_relative_to also covers cwd == "/" (a startswith(cwd + sep) test
     # builds "//" there and rejects every child).
@@ -65,6 +83,9 @@ def resolve_file(cwd: str, rel: str) -> Path:
         raise ArtifactError("path cannot be resolved", 422) from None
     if not _inside(cwd_real, target):
         raise ArtifactError("path escapes the session directory", 403)
+    # Refused before any existence check: a hidden folder or a known secret file
+    # is out of scope whether or not it happens to be there.
+    _reject_sensitive(Path(*parts))
     path = Path(target)
     if not path.exists():
         raise ArtifactError("no such file", 404)
@@ -88,6 +109,10 @@ def resolve_dir(cwd: str, rel: str) -> Path:
         raise ArtifactError("path cannot be resolved", 422) from None
     if not _inside(cwd_real, target):
         raise ArtifactError("path escapes the session directory", 403)
+    # A hidden folder is not an upload target, present or not: .git/hooks and
+    # .ssh are the difference between "put a file in my project" and running code.
+    if any(part.startswith(".") for part in parts):
+        raise ArtifactError("hidden folders are not upload targets", 403)
     if not os.path.isdir(target):
         raise ArtifactError("no such directory", 404)
     return Path(target)
@@ -118,15 +143,24 @@ def save_upload(cwd: str, directory: str, filename: str, data: bytes,
     target_dir = resolve_dir(cwd, directory or "")
     leaf = safe_filename(filename)
     path = target_dir / leaf
-    # Belt and braces: the leaf cannot contain a separator, but a pre-existing
-    # symlink at that name could still point outside.
-    cwd_real = os.path.realpath(cwd)
-    if path.is_symlink() and not _inside(cwd_real, os.path.realpath(path)):
-        raise ArtifactError("that name is a symlink leaving the session directory", 403)
-    if path.exists() and not overwrite:
-        raise ArtifactError("a file with that name already exists", 409)
+    if leaf in _DENY_NAMES:
+        raise ArtifactError("that file is not writable here", 403)
+    # One syscall carries the whole policy: O_NOFOLLOW refuses a symlink at the
+    # name (dangling or not), O_EXCL refuses an existing file unless the caller
+    # asked to overwrite, and O_TRUNC only applies when they did. No check-then-
+    # write window.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_TRUNC if overwrite else os.O_EXCL)
     try:
-        path.write_bytes(data)
+        fd = os.open(path, flags, 0o644)
+    except FileExistsError:
+        raise ArtifactError("a file with that name already exists", 409) from None
+    except OSError as e:
+        if e.errno in (getattr(os, "ELOOP", 40), getattr(os, "EMLINK", 31)):
+            raise ArtifactError("that name is a symlink", 403) from None
+        raise ArtifactError(f"could not write the file: {e.strerror or e}", 500) from None
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
     except OSError as e:
         raise ArtifactError(f"could not write the file: {e.strerror or e}", 500) from None
     rel = path.relative_to(Path(os.path.realpath(cwd))).as_posix() \

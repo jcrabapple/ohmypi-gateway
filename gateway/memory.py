@@ -137,7 +137,7 @@ def stats(root: Path | None = None) -> dict:
                 "WHERE t.tier = 'hot' ORDER BY n.updated DESC LIMIT 8"
             ):
                 hot.append({"id": row["id"], "title": row["title"]})
-    except MemoryError_:
+    except (MemoryError_, sqlite3.Error):
         counts = {k: 0 for k in counts}
     hot_md = root / "HOT.md"
     return {
@@ -182,7 +182,8 @@ def search(q: str = "", limit: int = 20, root: Path | None = None) -> dict:
                     "SELECT f.id, f.title, bm25(nodes_fts) AS rank, "
                     "snippet(nodes_fts, 2, '', '', '…', 14) AS snip, n.kind "
                     "FROM nodes_fts f JOIN nodes n ON n.id = f.id "
-                    "LEFT JOIN tiers t ON t.id = f.id WHERE nodes_fts MATCH ? "
+                    "LEFT JOIN tiers t ON t.id = f.id "
+                    "WHERE nodes_fts MATCH ? AND n.kind = 'note' "
                     "ORDER BY CASE t.tier WHEN 'hot' THEN 0 WHEN 'warm' THEN 1 "
                     "WHEN 'archived' THEN 2 ELSE 1 END, rank LIMIT ?",
                     (safe, limit))
@@ -192,13 +193,15 @@ def search(q: str = "", limit: int = 20, root: Path | None = None) -> dict:
                 cur = conn.execute(
                     "SELECT f.id, f.title, 0 AS rank, '' AS snip, n.kind "
                     "FROM nodes_fts f JOIN nodes n ON n.id = f.id "
-                    "WHERE f.title LIKE ? OR f.body LIKE ? LIMIT ?",
+                    "WHERE n.kind = 'note' AND (f.title LIKE ? OR f.body LIKE ?) LIMIT ?",
                     (f"%{q}%", f"%{q}%", limit))
             for row in cur:
                 rows.append({"id": row["id"], "title": row["title"], "kind": row["kind"],
                              "tier": _tier(conn, row["id"]), "snippet": row["snip"] or ""})
     except MemoryError_ as e:
         return {"query": q, "notes": [], "error": e.message}
+    except sqlite3.Error:
+        return {"query": q, "notes": [], "error": "the memory index could not be read"}
     return {"query": q, "notes": rows}
 
 
@@ -257,7 +260,7 @@ def get_note(nid: str, root: Path | None = None) -> dict:
                 out.append({"id": row["dst"], "kind": row["kind"]})
             for row in conn.execute("SELECT src, kind FROM edges WHERE dst = ? ORDER BY kind, src", (nid,)):
                 inc.append({"id": row["src"], "kind": row["kind"]})
-    except MemoryError_:
+    except (MemoryError_, sqlite3.Error):
         pass
     return {
         "id": nid,
@@ -312,8 +315,16 @@ def save_note(*, nid: str | None = None, title: str, tags: list[str] | None = No
         raise MemoryError_("title is too long", 422)
     if len(body or "") > MAX_BODY_CHARS:
         raise MemoryError_("note body is too long", 413)
-    tags = [t for t in (tags or []) if isinstance(t, str) and t.strip()][:20]
-    links = [l for l in (links or []) if isinstance(l, str) and l.strip()][:40]
+    # The store is line-based frontmatter: a newline in any field would forge
+    # keys or close the block early, and a comma would split one tag into two.
+    if "\n" in title or "\r" in title:
+        raise MemoryError_("a title cannot contain line breaks", 422)
+    tags = [t.strip() for t in (tags or []) if isinstance(t, str) and t.strip()][:20]
+    links = [l.strip() for l in (links or []) if isinstance(l, str) and l.strip()][:40]
+    for field_name, values in (("tag", tags), ("link", links)):
+        for value in values:
+            if "\n" in value or "\r" in value or "," in value:
+                raise MemoryError_(f"a {field_name} cannot contain line breaks or commas", 422)
 
     created = False
     if nid:
@@ -406,6 +417,6 @@ def episodic(q: str = "", limit: int = 20) -> dict:
             continue
         finally:
             conn.close()
-    rows.sort(key=lambda r: (r["timestamp"] or ""), reverse=True)
+    rows.sort(key=lambda r: str(r["timestamp"] or ""), reverse=True)
     return {"query": term, "rows": rows[:limit], "scanned": scanned,
             "banks": len(banks)}

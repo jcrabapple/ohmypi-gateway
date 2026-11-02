@@ -637,7 +637,11 @@ async def plugins():
     """Installed omp plugins, structured. `omp plugin list --json` is the
     source; an older CLI without --json degrades to the raw text so the page
     can still show something."""
-    raw = await acli("plugin", "list", "--json", timeout=60)
+    try:
+        raw = await acli("plugin", "list", "--json", timeout=60)
+    except HTTPException as e:
+        return {"installed": [], "npm": [], "marketplace": [], "raw": "",
+                "error": str(e.detail)}
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -664,9 +668,10 @@ async def plugin_action(request: Request):
     if action not in PLUGIN_ACTIONS:
         raise HTTPException(422, f"action must be one of {sorted(PLUGIN_ACTIONS)}")
     target = str(body.get("target") or "").strip()
-    if action != "doctor":
-        if not PLUGIN_TARGET.match(target):
-            raise HTTPException(422, "target must be a package or plugin name")
+    if target and not PLUGIN_TARGET.match(target):
+        raise HTTPException(422, "target must be a package or plugin name")
+    if action != "doctor" and not target:
+        raise HTTPException(422, "target is required for this action")
     args = ["plugin", PLUGIN_ACTIONS[action]] + ([target] if target else [])
     try:
         out = await acli(*args, timeout=600)
@@ -1409,7 +1414,15 @@ async def session_upload(gw_id: str, request: Request, name: str = "", dir: str 
     if declared and declared.isdigit() and int(declared) > artifacts.MAX_UPLOAD_BYTES:
         raise HTTPException(413, f"file is larger than "
                                  f"{artifacts.MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
-    data = await request.body()
+    # Content-Length is optional (chunked bodies have none), so the cap has to
+    # be enforced while reading, not just announced.
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf.extend(chunk)
+        if len(buf) > artifacts.MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"file is larger than "
+                                     f"{artifacts.MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+    data = bytes(buf)
     try:
         return await asyncio.to_thread(artifacts.save_upload, sess.cwd, dir, name, data, overwrite)
     except artifacts.ArtifactError as e:

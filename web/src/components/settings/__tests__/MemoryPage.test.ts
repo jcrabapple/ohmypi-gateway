@@ -145,6 +145,56 @@ describe('MemoryPage', () => {
     expect(text).toContain('across 1 bank');
   });
 
+  it('keeps the newest result when an older search answers late', async () => {
+    let landSlow: (v: unknown) => void = () => {};
+    const slow = new Promise((resolve) => {
+      landSlow = resolve;
+    });
+    const notes = vi.spyOn(memory, 'notes');
+    notes.mockClear();
+    // initial '' search resolves at once, then 'alpha' hangs and 'beta' answers.
+    notes.mockResolvedValueOnce({ query: '', notes: [] });
+    notes.mockReturnValueOnce(slow as never);
+    notes.mockResolvedValueOnce({
+      query: 'beta',
+      notes: [{ id: 'note-beta', title: 'Beta result', kind: 'note', tier: 'warm', snippet: '' }],
+    });
+    const { target } = render(MemoryPage, {});
+    await settle();
+    const input = target.querySelector<HTMLInputElement>('input[type=search]')!;
+    const type = async (v: string) => {
+      input.value = v;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await settle();
+    };
+    await type('alpha');
+    await new Promise((r) => setTimeout(r, 260)); // let the debounce fire
+    await type('beta');
+    await new Promise((r) => setTimeout(r, 260));
+    await settle();
+    expect(target.textContent).toContain('Beta result');
+    // The stale 'alpha' answer lands last and must not replace the list.
+    landSlow({ query: 'alpha', notes: [{ id: 'note-alpha', title: 'Alpha result', kind: 'note', tier: 'warm', snippet: '' }] });
+    await settle();
+    expect(target.textContent).toContain('Beta result');
+    expect(target.textContent).not.toContain('Alpha result');
+  });
+
+  it('shows a skill hit but will not open it as a note', async () => {
+    vi.spyOn(memory, 'notes').mockResolvedValue({
+      query: 'aurora',
+      notes: [{ id: 'skill:aurora', title: 'aurora', kind: 'skill', tier: 'warm', snippet: '' }],
+    });
+    const note = vi.spyOn(memory, 'note');
+    const { target } = render(MemoryPage, {});
+    await settle();
+    const row = buttonNamed(target, /aurora/)!;
+    expect(row.disabled).toBe(true);
+    row.click();
+    await settle();
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it('reports a failed search instead of showing a stale list', async () => {
     vi.spyOn(memory, 'notes').mockRejectedValue(new Error('boom'));
     const { target } = render(MemoryPage, {});

@@ -30,32 +30,42 @@
   let recallQ = $state('');
   const loadRecall = () => void episodic.run(() => memory.recall(recallQ, 25));
 
-  let debounce: ReturnType<typeof setTimeout> | undefined;
+  let queryDebounce: ReturnType<typeof setTimeout> | undefined;
+  let recallDebounce: ReturnType<typeof setTimeout> | undefined;
+  // Typing faster than the index answers means responses can land out of order;
+  // only the newest request may touch the list.
+  let searchGen = 0;
 
   onMount(() => {
     loadStats();
     loadRecall();
     void runSearch('');
-    return () => clearTimeout(debounce);
+    return () => {
+      clearTimeout(queryDebounce);
+      clearTimeout(recallDebounce);
+    };
   });
 
   async function runSearch(q: string) {
+    const gen = ++searchGen;
     searching = true;
     searchError = null;
     try {
       const res = await memory.notes(q, 40);
+      if (gen !== searchGen) return;
       hits = res.notes;
       if (res.error) searchError = res.error;
     } catch (e) {
+      if (gen !== searchGen) return;
       searchError = e instanceof ApiError ? e.message : 'Search failed';
     } finally {
-      searching = false;
+      if (gen === searchGen) searching = false;
     }
   }
 
   function onQuery() {
-    clearTimeout(debounce);
-    debounce = setTimeout(() => void runSearch(query.trim()), 220);
+    clearTimeout(queryDebounce);
+    queryDebounce = setTimeout(() => void runSearch(query.trim()), 220);
   }
 
   function fill(note: MemoryNote) {
@@ -63,6 +73,7 @@
   }
 
   async function openNote(id: string) {
+    if (id.includes(':')) return; // skill:/tag: rows are context, not notes
     noteLoading = true;
     saveNote = null;
     try {
@@ -144,8 +155,8 @@
   }
 
   function onRecall() {
-    clearTimeout(debounce);
-    debounce = setTimeout(() => loadRecall(), 300);
+    clearTimeout(recallDebounce);
+    recallDebounce = setTimeout(() => loadRecall(), 300);
   }
 
   const tierLabel = (t: string) => (t === 'hot' ? 'hot' : t === 'archived' ? 'archived' : 'warm');
@@ -201,7 +212,12 @@
     <ul class="list">
       {#each hits as hit (hit.id)}
         <li>
-          <button type="button" class="row" onclick={() => openNote(hit.id)}>
+          <button
+            type="button"
+            class="row"
+            disabled={hit.kind !== 'note'}
+            onclick={() => openNote(hit.id)}
+          >
             <span class="top">
               <span class="name">{hit.title}</span>
               <span class="tier" class:hot={hit.tier === 'hot'}>{tierLabel(hit.tier)}</span>
@@ -354,6 +370,14 @@
     color: var(--ink-2);
     font-size: var(--fs-xs);
     min-height: 32px;
+  }
+  @media (pointer: coarse) {
+    .chip {
+      min-height: var(--hit, 44px);
+    }
+  }
+  .row:disabled {
+    opacity: 0.7;
   }
   .find {
     display: flex;

@@ -38,6 +38,9 @@
 
   async function run(action: 'install' | 'uninstall' | 'enable' | 'disable' | 'doctor', name = '') {
     if (busy) return;
+    // Claim the page before the dialog opens: a second action fired while the
+    // confirm is up would race the CLI.
+    busy = action + name;
     if (action === 'uninstall') {
       const ok = await confirm({
         title: `Remove ${name}?`,
@@ -45,9 +48,11 @@
         confirmLabel: 'Remove',
         danger: true,
       });
-      if (!ok) return;
+      if (!ok) {
+        busy = null;
+        return;
+      }
     }
-    busy = action + name;
     output = null;
     try {
       const res = await plugins.action(action, name);

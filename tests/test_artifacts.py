@@ -40,10 +40,19 @@ class ResolveFileTest(unittest.TestCase):
         p = artifacts.resolve_file(str(self.cwd), "sub/deep.txt")
         self.assertEqual(p.read_text(), "deep\n")
 
-    def test_dotfile_is_servable_when_named(self):
-        # Listing hides dotfiles; an explicit request is still allowed.
-        p = artifacts.resolve_file(str(self.cwd), ".env")
-        self.assertEqual(p.name, ".env")
+    def test_dotfiles_and_secrets_are_refused(self):
+        # Listing hides dotfiles; asking for one by name is 403 as well, so this
+        # route cannot pull .env or a dot-directory out of a repo or a home dir.
+        for probe in (".env", ".git/config", ".ssh/id_rsa"):
+            with self.subTest(probe=probe), self.assertRaises(ArtifactError) as e:
+                artifacts.resolve_file(str(self.cwd), probe)
+            self.assertEqual(e.exception.status, 403)
+
+    def test_gateway_credentials_are_refused(self):
+        (self.cwd / "auth-token").write_text("secret")
+        with self.assertRaises(ArtifactError) as e:
+            artifacts.resolve_file(str(self.cwd), "auth-token")
+        self.assertEqual(e.exception.status, 403)
 
     def test_rejects_absolute_and_parent(self):
         for bad in ("/etc/passwd", "../secret.txt", "sub/../../secret.txt", "a\x00b"):
@@ -100,6 +109,20 @@ class SaveUploadTest(unittest.TestCase):
             with self.assertRaises(ArtifactError) as e:
                 artifacts.save_upload(str(self.cwd), "", "big.bin", b"12345")
         self.assertEqual(e.exception.status, 413)
+
+    def test_hidden_folders_are_not_upload_targets(self):
+        for directory in (".git/hooks", ".ssh", ".config/systemd/user"):
+            with self.subTest(directory=directory), self.assertRaises(ArtifactError) as e:
+                artifacts.save_upload(str(self.cwd), directory, "x.txt", b"x")
+            self.assertIn(e.exception.status, (403, 404))
+
+    def test_dangling_symlink_is_refused_even_with_overwrite(self):
+        real = self.cwd.parent / "outside-target.txt"
+        (self.cwd / "dangling.txt").symlink_to(real)
+        with self.assertRaises(ArtifactError) as e:
+            artifacts.save_upload(str(self.cwd), "", "dangling.txt", b"x", overwrite=True)
+        self.assertEqual(e.exception.status, 403)
+        self.assertFalse(real.exists())
 
     def test_bad_names_and_dirs(self):
         # Path components in an upload name are stripped, never honored (see below).

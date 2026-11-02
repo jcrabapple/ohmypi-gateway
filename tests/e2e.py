@@ -557,6 +557,15 @@ try:
         (fdir / "escape-link.txt").unlink(missing_ok=True)
     code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=alpha.txt", token=None)
     check("file-download-needs-auth", code == 401, f"-> {code}")
+    # Secrets and hidden folders are out of scope for this route.
+    (fdir / "auth-token").write_text("secret")
+    try:
+        code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=auth-token")
+        check("file-download-refuses-gateway-token", code == 403, f"-> {code}")
+    finally:
+        (fdir / "auth-token").unlink(missing_ok=True)
+    code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=.hidden")
+    check("file-download-refuses-dotfile", code == 403, f"-> {code}")
 
     code, data, _ = req("POST", f"/api/sessions/{fg}/upload?name=e2e-up.txt", raw=b"uploaded")
     check("upload-ok", code == 200 and data.get("name") == "e2e-up.txt"
@@ -576,6 +585,8 @@ try:
                                ("name=", "no-name", 422)):
         code, _, _ = req("POST", f"/api/sessions/{fg}/upload?{probe}", raw=b"x")
         check(f"upload-{label}", code == want, f"-> {code}")
+    code, _, _ = req("POST", f"/api/sessions/{fg}/upload?name=x.txt&dir=.git", raw=b"x")
+    check("upload-refuses-hidden-dir", code == 403, f"-> {code}")
     code, _, _ = req("POST", f"/api/sessions/{fg}/upload?name=e2e-anon.txt", raw=b"x", token=None)
     check("upload-needs-auth", code == 401, f"-> {code}")
     req("POST", f"/api/sessions/{fg}/upload?name=page.html", raw=b"<h1>x</h1>")
@@ -912,6 +923,11 @@ code, _, _ = req("POST", "/api/plugins/action", {"action": "install", "target": 
 check("plugins-flag-target-422", code == 422, f"-> {code}")
 code, _, _ = req("POST", "/api/plugins/action", {"action": "install", "target": "a; rm -rf /"})
 check("plugins-injection-target-422", code == 422, f"-> {code}")
+code, _, _ = req("POST", "/api/plugins/action", {"action": "install", "target": ""})
+check("plugins-missing-target-422", code == 422, f"-> {code}")
+# doctor takes no target, but a flag-shaped one must not slip through as an argv flag
+code, _, _ = req("POST", "/api/plugins/action", {"action": "doctor", "target": "--fix"})
+check("plugins-doctor-flag-target-422", code == 422, f"-> {code}")
 code, data, _ = req("POST", "/api/plugins/action", {"action": "doctor"})
 check("plugins-doctor-200", code == 200 and isinstance(data.get("ok"), bool)
       and "output" in data, f"-> {code}")

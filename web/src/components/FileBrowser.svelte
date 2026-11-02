@@ -2,7 +2,6 @@
   // Artifacts in the session's working directory: browse, download what a run
   // produced, and put a file in. Downloads go through the gateway with the
   // session cookie, so a plain link works and nothing needs a token in the URL.
-  import { onMount } from 'svelte';
   import { fileUrl, sessionFiles, sessions } from '../lib/api/endpoints';
   import type { FileIndexEntry } from '../lib/api/types';
   import { ApiError } from '../lib/api/client';
@@ -27,8 +26,6 @@
     void listing.run(() => sessionFiles(gwId!, dir));
   };
 
-  onMount(load);
-
   // Opening another folder resets the list instead of showing the old one.
   $effect(() => {
     void dir;
@@ -36,8 +33,10 @@
   });
 
   const parts = $derived(dir ? dir.split('/').filter(Boolean) : []);
-  const crumbs = $derived(() => {
-    const out: { label: string; path: string }[] = [{ label: cwd.split('/').filter(Boolean).pop() || 'session', path: '' }];
+  const crumbs = $derived.by(() => {
+    const out: { label: string; path: string }[] = [
+      { label: cwd.split('/').filter(Boolean).pop() || 'session', path: '' },
+    ];
     let acc = '';
     for (const p of parts) {
       acc = acc ? `${acc}/${p}` : p;
@@ -45,6 +44,7 @@
     }
     return out;
   });
+  const atRoot = $derived(crumbs.length === 1);
 
   const entries = $derived(listing.data ?? []);
   const size = (n: number | null) => {
@@ -96,16 +96,16 @@
 <Sheet open onclose={onclose} title="Files" size="lg" flush>
   <div class="files">
     <div class="bar">
-      <button type="button" class="icon-btn" aria-label="Up one folder" disabled={!parts.length} onclick={up}>
+      <button type="button" class="icon-btn" aria-label="Up one folder" disabled={atRoot} onclick={up}>
         <Icon name="chevron-right" size={16} />
       </button>
       <nav class="crumbs" aria-label="Folder path">
-        {#each crumbs() as c, i (c.path)}
+        {#each crumbs as c, i (c.path)}
           {#if i > 0}<span class="sep">/</span>{/if}
           <button
             type="button"
             class="crumb"
-            aria-current={i === crumbs().length - 1 ? 'true' : undefined}
+            aria-current={i === crumbs.length - 1 ? 'true' : undefined}
             onclick={() => (dir = c.path)}
           >{c.label}</button>
         {/each}
@@ -204,6 +204,11 @@
     font-size: var(--fs-sm);
     padding: 4px 2px;
     min-height: 32px;
+  }
+  @media (pointer: coarse) {
+    .crumb {
+      min-height: var(--hit, 44px);
+    }
   }
   .crumb[aria-current='true'] {
     color: var(--ink);
