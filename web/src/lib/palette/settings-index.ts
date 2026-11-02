@@ -4,7 +4,8 @@
 import { fuzzyScoreAll } from './fuzzy';
 
 export type SettingsPageId =
-  | 'appearance' | 'agent' | 'models' | 'skills' | 'usage' | 'connection' | 'shortcuts';
+  | 'appearance' | 'agent' | 'models' | 'skills' | 'memory' | 'plugins' | 'usage' | 'connection'
+  | 'shortcuts';
 
 export interface SettingsPage {
   id: SettingsPageId;
@@ -30,6 +31,8 @@ export const SETTINGS_PAGES: readonly SettingsPage[] = [
   { id: 'agent', title: 'Agent config', blurb: 'Edit the omp config file' },
   { id: 'models', title: 'Models', blurb: 'Browse the model catalog' },
   { id: 'skills', title: 'Skills', blurb: 'Skills installed on the gateway host' },
+  { id: 'memory', title: 'Memory', blurb: 'Notes, tags and links from the memory graph' },
+  { id: 'plugins', title: 'Plugins', blurb: 'Install and remove omp plugins' },
   { id: 'usage', title: 'Usage', blurb: 'Provider usage and limits' },
   { id: 'connection', title: 'Connection', blurb: 'Versions, uptime and sign out' },
   { id: 'shortcuts', title: 'Shortcuts', blurb: 'Every keyboard shortcut' },
@@ -45,6 +48,11 @@ export const SETTINGS_ENTRIES: readonly SettingsEntry[] = [
   { id: 'config', page: 'agent', label: 'Agent config file', keywords: 'yaml config.yml editor save default model edit omp' },
   { id: 'catalog', page: 'models', label: 'Model catalog', keywords: 'models provider context price search use switch' },
   { id: 'skill-list', page: 'skills', label: 'Installed skills', keywords: 'skill description installed' },
+  { id: 'memory-search', page: 'memory', label: 'Search notes', keywords: 'memory notes recall search graph knowledge remember' },
+  { id: 'memory-new', page: 'memory', label: 'New note', keywords: 'memory note create write save knowledge' },
+  { id: 'memory-episodic', page: 'memory', label: 'Episodic recall', keywords: 'mnemopi episodic working memory transcript fuzzy recall banks' },
+  { id: 'plugin-list', page: 'plugins', label: 'Installed plugins', keywords: 'plugin extension package install list' },
+  { id: 'plugin-install', page: 'plugins', label: 'Install a plugin', keywords: 'plugin install add package npm marketplace uninstall doctor' },
   { id: 'usage-report', page: 'usage', label: 'Usage report', keywords: 'usage limits quota tokens cost provider' },
   { id: 'versions', page: 'connection', label: 'Gateway and omp versions', keywords: 'version uptime gateway omp live sessions system' },
   { id: 'push', page: 'connection', label: 'Push notifications', keywords: 'push notification needs you approval dialog subscribe device vapid' },

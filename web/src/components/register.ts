@@ -2,6 +2,7 @@
 import { registerOverlay } from '../lib/overlays';
 import CleanupSheet from './CleanupSheet.svelte';
 import CommandPalette from './CommandPalette.svelte';
+import FileBrowser from './FileBrowser.svelte';
 import InspectorSheet from './InspectorSheet.svelte';
 import SessionInfoSheet from './SessionInfoSheet.svelte';
 import SettingsOverlay from './SettingsOverlay.svelte';
@@ -12,4 +13,5 @@ export function registerOverlays(): void {
   registerOverlay('session-info', SessionInfoSheet);
   registerOverlay('inspector', InspectorSheet);
   registerOverlay('session-cleanup', CleanupSheet);
+  registerOverlay('files', FileBrowser);
 }

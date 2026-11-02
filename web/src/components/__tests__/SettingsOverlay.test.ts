@@ -41,7 +41,9 @@ describe('SettingsOverlay', () => {
   it('lists every page and starts on Appearance', () => {
     const { target } = mountSettings();
     const names = [...target.querySelectorAll('nav .item .t')].map((e) => e.textContent);
-    expect(names).toEqual(['Appearance', 'Agent config', 'Models', 'Skills', 'Usage', 'Connection', 'Shortcuts']);
+    expect(names).toEqual([
+      'Appearance', 'Agent config', 'Models', 'Skills', 'Memory', 'Plugins', 'Usage', 'Connection', 'Shortcuts',
+    ]);
     expect(target.querySelector('.page-title')?.textContent).toBe('Appearance');
     expect(target.querySelector('nav [aria-current="page"]')).not.toBeNull();
   });

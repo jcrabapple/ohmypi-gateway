@@ -10,7 +10,9 @@
   import AgentConfigPage from './settings/AgentConfigPage.svelte';
   import AppearancePage from './settings/AppearancePage.svelte';
   import ConnectionPage from './settings/ConnectionPage.svelte';
+  import MemoryPage from './settings/MemoryPage.svelte';
   import ModelsPage from './settings/ModelsPage.svelte';
+  import PluginsPage from './settings/PluginsPage.svelte';
   import ShortcutsPage from './settings/ShortcutsPage.svelte';
   import SkillsPage from './settings/SkillsPage.svelte';
   import UsagePage from './settings/UsagePage.svelte';
@@ -194,6 +196,10 @@
           <ModelsPage />
         {:else if page === 'skills'}
           <SkillsPage />
+        {:else if page === 'memory'}
+          <MemoryPage />
+        {:else if page === 'plugins'}
+          <PluginsPage />
         {:else if page === 'usage'}
           <UsagePage />
         {:else if page === 'connection'}

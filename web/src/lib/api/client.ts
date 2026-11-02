@@ -20,6 +20,8 @@ export interface ApiOptions {
   method?: string;
   /** Objects are sent as JSON. Strings are sent raw; set `headers['Content-Type']` for non-text bodies. */
   body?: unknown;
+  /** A Blob/File/FormData body sent as-is. Takes precedence over `body`. */
+  raw?: BodyInit;
   headers?: Record<string, string>;
   signal?: AbortSignal;
   /** Abort the request after this long. Default 30 s; the model catalog can take a minute. */
@@ -88,7 +90,10 @@ function errorMessage(status: number, statusText: string, data: unknown): string
 export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Promise<T> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   let body: BodyInit | undefined;
-  if (opts.body !== undefined) {
+  if (opts.raw !== undefined) {
+    // Uploads: the caller owns the bytes and the Content-Type.
+    body = opts.raw;
+  } else if (opts.body !== undefined) {
     if (typeof opts.body === 'string') {
       body = opts.body;
       if (!hasHeader(headers, 'content-type')) headers['Content-Type'] = 'text/plain;charset=UTF-8';

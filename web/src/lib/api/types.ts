@@ -635,3 +635,118 @@ export interface SearchResponse {
   results: SearchHit[];
   indexed: { files: number; messages: number };
 }
+
+// ------------------------------------------------------------------- memory
+/** GET /api/memory: counts from the graph index, plus the hot list. */
+export interface MemoryCounts {
+  note: number;
+  skill: number;
+  tag: number;
+  edges: number;
+}
+
+export interface MemoryHotNote {
+  id: string;
+  title: string;
+}
+
+export interface MemoryStats {
+  counts: MemoryCounts;
+  hot: MemoryHotNote[];
+  root: string;
+  hasHotFile: boolean;
+}
+
+/** One search hit. `id` is the store's own note id (no namespace prefix). */
+export interface MemoryNoteRef {
+  id: string;
+  title: string;
+  kind: string;
+  tier: string;
+  snippet: string;
+}
+
+export interface MemorySearch {
+  query: string;
+  notes: MemoryNoteRef[];
+  error?: string;
+}
+
+export interface MemoryEdge {
+  id: string;
+  kind: string;
+}
+
+/** GET /api/memory/notes/{id}: the markdown note plus both edge directions. */
+export interface MemoryNote {
+  id: string;
+  title: string;
+  tags: string[];
+  links: string[];
+  body: string;
+  path: string;
+  tier: string;
+  archived: boolean;
+  outgoing: MemoryEdge[];
+  incoming: MemoryEdge[];
+}
+
+export interface MemorySaveResult {
+  id: string;
+  created: boolean;
+  path: string;
+  index: { indexed: boolean; reason?: string; output?: string };
+  note: MemoryNote | null;
+}
+
+/** One mnemopi working-memory row (read-only episodic layer). */
+export interface EpisodicRow {
+  id: string;
+  bank: string;
+  content: string;
+  source: string | null;
+  importance: number | null;
+  scope: string | null;
+  timestamp: string | null;
+}
+
+export interface EpisodicResult {
+  query: string;
+  rows: EpisodicRow[];
+  scanned: number;
+  banks: number;
+}
+
+// ------------------------------------------------------------------ plugins
+/** Shape of one `omp plugin list --json` entry varies by plugin; render
+    defensively from the fields we know. */
+export interface PluginEntry {
+  name?: string;
+  version?: string;
+  description?: string;
+  [key: string]: unknown;
+}
+
+export interface PluginsResponse {
+  installed: PluginEntry[];
+  npm: PluginEntry[];
+  marketplace: PluginEntry[];
+  raw: string;
+  error?: string;
+}
+
+export interface PluginActionResult {
+  ok: boolean;
+  action: string;
+  target: string;
+  output: string;
+  error?: string;
+}
+
+// ---------------------------------------------------------------- artifacts
+/** POST /api/sessions/{id}/upload */
+export interface UploadResult {
+  name: string;
+  path: string;
+  size: number;
+}

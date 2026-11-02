@@ -1,11 +1,12 @@
 // Typed calls for every gateway route the app uses. Thin on purpose: no state,
 // no caching. Stores decide what to do with the results.
-import { api, resetSignedOut } from './client';
+import { api, getBaseUrl, resetSignedOut } from './client';
 import type {
-  ApprovalMode, CatalogModels, CommandsResponse, EntriesResponse, EventsResponse, FileIndexEntry, FilesResponse,
-  ForkResponse, FsDirs, LedgerResponse, LedgerSessionsResponse, MessagesResponse, QueueEntry, SavedSession, SearchResponse,
-  SessionInfo, SessionsList, SessionState, SessionStats, SubagentMessagesResponse, SystemInfo, ThinkingLevel,
-  UiAnswer, UiRequest,
+  ApprovalMode, CatalogModels, CommandsResponse, EntriesResponse, EpisodicResult, EventsResponse, FileIndexEntry,
+  FilesResponse, ForkResponse, FsDirs, LedgerResponse, LedgerSessionsResponse, MemoryNote, MemorySaveResult,
+  MemorySearch, MemoryStats, MessagesResponse, PluginActionResult, PluginsResponse, QueueEntry, SavedSession,
+  SearchResponse, SessionInfo, SessionsList, SessionState, SessionStats, SubagentMessagesResponse, SystemInfo,
+  ThinkingLevel, UiAnswer, UiRequest, UploadResult,
 } from './types';
 
 export type PromptMode = 'prompt' | 'steer' | 'follow_up';
@@ -132,6 +133,47 @@ export const sessions = {
         { signal },
       ),
   },
+
+  /** Put one file into the session cwd (raw body, no multipart). */
+  upload: (id: string, file: File, dir = '', overwrite = false) => {
+    const params = new URLSearchParams({ name: file.name, dir });
+    if (overwrite) params.set('overwrite', 'true');
+    return api<UploadResult>(`${sid(id)}/upload?${params.toString()}`, {
+      method: POST,
+      raw: file,
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      timeoutMs: 180_000,
+    });
+  },
+};
+
+/** Direct download URL for one file in the session cwd. Cookie-authenticated
+ *  browsers can use it as a plain link; bearer clients should fetch it. */
+export function fileUrl(id: string, path: string): string {
+  return `${getBaseUrl()}${sid(id)}/file?path=${encodeURIComponent(path)}`;
+}
+
+export const memory = {
+  stats: (signal?: AbortSignal) => api<MemoryStats>('/api/memory', { signal }),
+  notes: (q = '', limit = 20, signal?: AbortSignal) =>
+    api<MemorySearch>(`/api/memory/notes?q=${encodeURIComponent(q)}&limit=${limit}`, { signal }),
+  note: (id: string, signal?: AbortSignal) =>
+    api<MemoryNote>(`/api/memory/notes/${encodeURIComponent(id)}`, { signal }),
+  save: (body: { id?: string; title: string; tags: string[]; links: string[]; body: string }) =>
+    api<MemorySaveResult>('/api/memory/notes', { method: POST, body, timeoutMs: 180_000 }),
+  archive: (id: string) =>
+    api<{ ok: boolean; already?: boolean }>(`/api/memory/notes/${encodeURIComponent(id)}/archive`, {
+      method: POST,
+      timeoutMs: 180_000,
+    }),
+  recall: (q = '', limit = 20, signal?: AbortSignal) =>
+    api<EpisodicResult>(`/api/memory/recall?q=${encodeURIComponent(q)}&limit=${limit}`, { signal }),
+};
+
+export const plugins = {
+  list: (signal?: AbortSignal) => api<PluginsResponse>('/api/plugins', { signal }),
+  action: (action: 'install' | 'uninstall' | 'enable' | 'disable' | 'doctor', target = '') =>
+    api<PluginActionResult>('/api/plugins/action', { method: POST, body: { action, target }, timeoutMs: 620_000 }),
 };
 
 /** Subfolders of one folder on the gateway host, for the New session picker.

@@ -25,7 +25,7 @@ describe('buildPaletteItems', () => {
     const items = buildPaletteItems(ctx());
     expect(ids(items)).toContain('a:new');
     expect(ids(items)).toContain('a:theme');
-    expect(items.filter((i) => i.kind === 'setting')).toHaveLength(7);
+    expect(items.filter((i) => i.kind === 'setting')).toHaveLength(9);
   });
 
   it('offers session actions only when the open session is live', () => {

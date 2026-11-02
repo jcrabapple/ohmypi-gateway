@@ -125,6 +125,7 @@
   );
   const items = $derived<MenuItem[]>([
     ...(reviewItem ? [reviewItem] : []),
+    { id: 'files', label: 'Files', icon: 'file', onselect: () => openOverlay('files') },
     { id: 'info', label: 'Session info', icon: 'info', onselect: () => openOverlay('session-info') },
     { id: 'compact', label: 'Compact', icon: 'compress', disabled: busy.compacting || active.running, onselect: compactSession },
     { id: 'fork', label: 'Fork from here', icon: 'fork', disabled: busy.forking || active.running, onselect: forkLatest },

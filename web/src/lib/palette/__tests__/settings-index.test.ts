@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { pageTitle, searchSettings, SETTINGS_ENTRIES, SETTINGS_PAGES } from '../settings-index';
 
 describe('settings index', () => {
-  it('has seven pages and every entry points at a real page', () => {
-    expect(SETTINGS_PAGES.map((p) => p.id)).toEqual(['appearance', 'agent', 'models', 'skills', 'usage', 'connection', 'shortcuts']);
+  it('has nine pages and every entry points at a real page', () => {
+    expect(SETTINGS_PAGES.map((p) => p.id)).toEqual(['appearance', 'agent', 'models', 'skills', 'memory', 'plugins', 'usage', 'connection', 'shortcuts']);
     for (const e of SETTINGS_ENTRIES) expect(SETTINGS_PAGES.some((p) => p.id === e.page), e.id).toBe(true);
     expect(new Set(SETTINGS_ENTRIES.map((e) => e.id)).size).toBe(SETTINGS_ENTRIES.length);
   });

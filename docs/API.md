@@ -87,10 +87,42 @@ validation failures included, HTTP 422).
 | GET | `/models?q=` | `omp models` catalog as text (`{raw}`) |
 | GET | `/catalog/models?refresh=` | `{"models": [...]}`, exactly what `omp models --json` emits (`provider`, `id`, `selector`, `name`, `contextWindow`, `maxTokens`, `reasoning`, `thinking` (`string[]` or `null`), `input`, `cost`). Cached in memory for 10 minutes; `refresh=1` bypasses the cache. First call can take up to about a minute. Use this, not the session's `/models` |
 | GET | `/skills` | installed skills with metadata |
-| GET | `/plugins` | installed plugins |
+| GET | `/plugins` | installed plugins as JSON: `{installed, npm, marketplace, raw}` from `omp plugin list --json` (`raw` is the CLI text; an omp build without `--json` returns `installed: []` plus an `error` string) |
+| POST | `/plugins/action` | `{action, target}`: `action` is `install` \| `uninstall` \| `enable` \| `disable` \| `doctor` (anything else 422). `target` is required except for `doctor` and must match `^[A-Za-z0-9@][A-Za-z0-9@._/+-]{0,159}$` (422 otherwise, so a leading dash can never become a flag and never reaches a shell). Runs `omp plugin <action> <target>` with a 600 s budget and returns `{ok, action, target, output}`; a CLI failure is `ok: false` with the CLI's message in `output` and `error`, still HTTP 200 |
 | GET | `/agents` | subagent definitions |
 | GET | `/usage` | `omp usage` report |
 | GET | `/stats` | `omp stats` report |
+
+### Memory
+
+The assistant's knowledge store on the gateway host. Notes are markdown files
+under `~/.omp/agent/memory/notes` (archived ones under `archive/`); `graph.db`
+is a rebuildable SQLite/FTS5 index of notes, skills and tags, and
+`oscar-memory index` rebuilds it from the markdown tree. Note ids are the
+frontmatter `id:` value (for example
+`note-20260928-oscar-telegram-bridge-architecture`); a leading `note:` is
+accepted on input and stripped. Skills and tags appear in edges as
+`skill:<name>` / `tag:<name>`.
+
+Writes touch the markdown file and then re-run the index. If the index CLI is
+not on the host (`OMPGW_OSCAR_MEMORY`, `PATH`, else `~/.local/bin/oscar-memory`)
+the note is still saved and the response says the index was skipped. Override
+the store root with `OMPGW_MEMORY_DIR`.
+
+Reads are read-only SQLite: this API never writes `graph.db` and never writes
+mnemopi. `GET /memory/recall` is a substring scan over mnemopi working memory
+across the shared store and every project bank (`OMPGW_MNEMOPI_DIR`), newest
+first; it is browsing, not semantic recall, because the gateway has no
+embedding model.
+
+| Method | Path | |
+|---|---|---|
+| GET | `/memory` | `{counts: {note, skill, tag, edges}, hot: [{id, title}], root, hasHotFile}`. A missing index reports zero counts instead of failing |
+| GET | `/memory/notes?q=&limit=` | FTS5 ranked search (`limit` 1..100, default 20) with the hot tier ranked first: `{query, notes: [{id, title, kind, tier, snippet}]}`. An empty `q` lists the most recently indexed notes. Raw FTS syntax is stripped; a query it cannot parse falls back to a title/body scan instead of erroring |
+| GET | `/memory/notes/{id}` | the note: `{id, title, tags, links, body, path, tier, archived, outgoing: [{id, kind}], incoming: [{id, kind}]}`. Unknown 404, a malformed id 422 |
+| POST | `/memory/notes` | `{id?, title, tags?, links?, body}` creates (no `id`) or updates. Title required (422), body over 200 kB 413, unknown `id` 404. `-> {id, created, path, index: {indexed, reason?, output?}, note}` where `note` is the re-read note when the index rebuilt |
+| POST | `/memory/notes/{id}/archive` | move the note to `archive/` and reindex: `{ok, path?, index, already?}` |
+| GET | `/memory/recall?q=&limit=` | `{query, rows: [{id, bank, content, source, importance, scope, timestamp}], scanned, banks}`. `bank` is the project bank name, or `shared` for the cross-project store. `limit` 1..50 |
 
 ### Usage ledger
 
@@ -181,6 +213,8 @@ session is a transcript on disk that can be resumed.
 | GET | `/sessions/{id}/entries` | session-file message entries via omp `get_entries`: `{entries: [{entryId, role, timestamp}]}`. The `entryId`s are the fork targets; only `role: "user"` rows branch |
 | POST | `/sessions/{id}/fork` | branch at a user entry (omp `branch`): `{entryId}`. Unknown session 404; `entryId` missing/not a string, unknown, or not a user message entry 422; a busy session (turn running or compacting) 409; omp command errors 400. Forks are serialized per session: a second concurrent fork waits, then sees the session stopped (404). A fork replaces its own parent (stop + register), so it is net-zero: it is allowed at the session cap, and 429s only when it would push the count past the cap. On success omp rewrites its live process into a new branched session file (the fork carries the history strictly BEFORE the entry; forking at the first user entry produces an empty session linked to the old file), so the gateway registers that branched session under a new gw id exactly like POST /sessions and stops the old child: returns `{gwId, forkedFrom, text}` where `text` is the forked message for a composer prefill. The old transcript stays on disk as a saved session. If registering the branched child fails after the parent was stopped, the parent is restored from disk as a new session and the route answers 500 naming the restored `gwId` in the detail |
 | GET | `/sessions/{id}/files?prefix=` | index-only listing of ONE directory of the session cwd, for @-file mentions: `{entries: [{name, path, isDir, size}]}`. Names and sizes only; file contents are never served. Dotfiles excluded, dirs before files, at most 200 entries. `prefix=""` lists the cwd; an absolute prefix or any `..` segment is 422, a path whose real location is outside the session cwd (e.g. an escaping symlink) is 403, an unknown path is 404, unknown session 404 |
+| GET | `/sessions/{id}/file?path=` | download ONE file from the session cwd. `path` is relative; an absolute path or any `..` segment is 422, a real location outside the cwd (including an escaping symlink) is 403, a directory is 415, a missing file 404. Served as an attachment with `Cache-Control: private, no-store`; HTML/SVG/JS and other active types are sent as `application/octet-stream` so the gateway origin can never serve a page. Ranges and ETags come from the framework |
+| POST | `/sessions/{id}/upload?name=&dir=&overwrite=` | put ONE file into the session cwd (`dir` selects a subfolder; default the cwd). The body is the raw bytes, not multipart; `name` is the leaf filename (a leading dot is 422, path components are stripped). At most 32 MiB (`OMPGW_MAX_UPLOAD_BYTES`), 413 above it; an existing file is 409 unless `overwrite=true`; a `dir` that escapes the cwd is 422, a missing one 404. `-> {name, path, size}` |
 | GET | `/sessions/{id}/subagents` | subagent registry snapshot from omp `get_subagents` (`{"subagents": [...]}`; empty until omp spawns one). The gateway subscribes every live session at `progress` level after v2 negotiation, so `subagent_progress` / `subagent_lifecycle` events flow on the WebSocket |
 | GET | `/sessions/{id}/subagents/{sid}/messages?from=` | one subagent's transcript via omp `get_subagent_messages` (`subagentId`, `fromByte`): `{messages, nextByte, reset, sessionFile}`. Page forward with `from=<nextByte>` while `nextByte` is present. Unknown `sid` is an omp command error → 400 |
 | GET | `/sessions/{id}/stats` | token/cost stats |

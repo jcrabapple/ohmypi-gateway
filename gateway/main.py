@@ -38,6 +38,8 @@ from .auth import (
     origin_allowed,
 )
 from . import collab, push  # noqa: E402  (no cycle: neither imports main)
+from . import artifacts, memory  # noqa: E402  (memory reads the store, never main)
+
 from .bridge import (
     DEFAULT_APPROVAL_MODE,
     OMP_AGENT_DIR,
@@ -53,7 +55,7 @@ from .bridge import (
 from .fsbrowse import FsBrowseError, list_subdirs
 from .ledger import DEFAULT_DAYS, close_ledger, get_ledger
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PROJECT_DIR / "static"
 # Built web client. Served when WEB_DIST/index.html exists, else the Alpine dashboard.
@@ -272,6 +274,16 @@ async def json_body(request: Request) -> dict:
 @app.exception_handler(RpcError)
 async def rpc_error_handler(request: Request, exc: RpcError):
     return JSONResponse({"error": str(exc), "code": exc.code}, status_code=400)
+
+
+@app.exception_handler(artifacts.ArtifactError)
+async def artifact_error_handler(request: Request, exc: artifacts.ArtifactError):
+    return JSONResponse({"error": exc.message}, status_code=exc.status)
+
+
+@app.exception_handler(memory.MemoryError_)
+async def memory_error_handler(request: Request, exc: memory.MemoryError_):
+    return JSONResponse({"error": exc.message}, status_code=exc.status)
 
 
 @app.exception_handler(ProcessDead)
@@ -622,7 +634,48 @@ async def _cli_text(*args: str, timeout: float = 60) -> dict:
 
 @app.get("/api/plugins")
 async def plugins():
-    return await _cli_text("plugin", "list", timeout=60)
+    """Installed omp plugins, structured. `omp plugin list --json` is the
+    source; an older CLI without --json degrades to the raw text so the page
+    can still show something."""
+    raw = await acli("plugin", "list", "--json", timeout=60)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"installed": [], "npm": [], "marketplace": [],
+                "raw": raw, "error": "this omp build returned no JSON"}
+    npm = data.get("npm") or []
+    market = data.get("marketplace") or []
+    return {"installed": npm + market, "npm": npm, "marketplace": market,
+            "raw": raw}
+
+
+PLUGIN_ACTIONS = {"install": "install", "uninstall": "uninstall",
+                  "enable": "enable", "disable": "disable", "doctor": "doctor"}
+PLUGIN_TARGET = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._/+-]{0,159}$")
+
+
+@app.post("/api/plugins/action")
+async def plugin_action(request: Request):
+    """Run one whitelisted `omp plugin` subcommand. Arguments are passed as a
+    list, never a shell string; the target is validated first so a leading dash
+    can never turn into a flag."""
+    body = await json_body(request)
+    action = str(body.get("action") or "")
+    if action not in PLUGIN_ACTIONS:
+        raise HTTPException(422, f"action must be one of {sorted(PLUGIN_ACTIONS)}")
+    target = str(body.get("target") or "").strip()
+    if action != "doctor":
+        if not PLUGIN_TARGET.match(target):
+            raise HTTPException(422, "target must be a package or plugin name")
+    args = ["plugin", PLUGIN_ACTIONS[action]] + ([target] if target else [])
+    try:
+        out = await acli(*args, timeout=600)
+    except HTTPException as e:
+        return JSONResponse({"ok": False, "action": action, "target": target,
+                             "output": str(e.detail), "error": str(e.detail)},
+                            status_code=200)
+    return {"ok": True, "action": action, "target": target, "output": out[-8000:]}
+
 
 
 @app.get("/api/usage")
@@ -638,6 +691,52 @@ async def agents():
 @app.get("/api/stats")
 async def stats():
     return await _cli_text("stats", timeout=60)
+
+
+# ------------------------------------------------------------------ memory
+# Host-level, like /api/skills: the assistant's knowledge store on this box.
+# Reads are cheap SQLite; writes are markdown plus an index rebuild, so every
+# call that can write goes through a thread.
+
+@app.get("/api/memory")
+async def memory_stats():
+    return await asyncio.to_thread(memory.stats)
+
+
+@app.get("/api/memory/notes")
+async def memory_notes(q: str = "", limit: int = Query(20, ge=1, le=100)):
+    return await asyncio.to_thread(memory.search, q, limit)
+
+
+@app.get("/api/memory/notes/{nid}")
+async def memory_note(nid: str):
+    return await asyncio.to_thread(memory.get_note, nid)
+
+
+@app.post("/api/memory/notes")
+async def memory_save(request: Request):
+    body = await json_body(request)
+    nid = body.get("id")
+    if nid is not None and not isinstance(nid, str):
+        raise HTTPException(422, "id must be a string")
+    tags = body.get("tags") or []
+    links = body.get("links") or []
+    if not isinstance(tags, list) or not isinstance(links, list):
+        raise HTTPException(422, "tags and links must be arrays of strings")
+    return await asyncio.to_thread(
+        memory.save_note, nid=nid, title=str(body.get("title") or ""),
+        tags=tags, links=links, body=str(body.get("body") or ""), root=None)
+
+
+@app.post("/api/memory/notes/{nid}/archive")
+async def memory_archive(nid: str):
+    return await asyncio.to_thread(memory.archive_note, nid)
+
+
+@app.get("/api/memory/recall")
+async def memory_recall(q: str = "", limit: int = Query(20, ge=1, le=50)):
+    """Read-only mnemopi working memory: the fuzzy episodic layer."""
+    return await asyncio.to_thread(memory.episodic, q, limit)
 
 
 # ---------------------------------------------------------------- usage ledger
@@ -1283,6 +1382,38 @@ async def session_files(gw_id: str, prefix: str = ""):
         raise HTTPException(422, "directory cannot be listed") from None
     entries.sort(key=lambda e: (not e["isDir"], e["name"]))
     return {"entries": entries[:MAX_FILE_ENTRIES]}
+
+
+@app.get("/api/sessions/{gw_id}/file")
+async def session_file(gw_id: str, path: str = ""):
+    """One artifact out of the session cwd, as a download. Ranges and ETags
+    come from FileResponse; the response is never cacheable by a proxy."""
+    sess = get_session_or_404(gw_id)
+    try:
+        target = artifacts.resolve_file(sess.cwd, path)
+    except artifacts.ArtifactError as e:
+        raise HTTPException(e.status, e.message) from None
+    return FileResponse(target, media_type=artifacts.media_type(target),
+                        filename=target.name,
+                        headers={"Cache-Control": "private, no-store"})
+
+
+@app.post("/api/sessions/{gw_id}/upload")
+async def session_upload(gw_id: str, request: Request, name: str = "", dir: str = "",
+                         overwrite: bool = False):
+    """Put one file into the session cwd (or a subfolder of it). The body is
+    the raw bytes: no multipart dependency, and the browser can send a Blob
+    straight from a file input."""
+    sess = get_session_or_404(gw_id)
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > artifacts.MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"file is larger than "
+                                 f"{artifacts.MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+    data = await request.body()
+    try:
+        return await asyncio.to_thread(artifacts.save_upload, sess.cwd, dir, name, data, overwrite)
+    except artifacts.ArtifactError as e:
+        raise HTTPException(e.status, e.message) from None
 
 
 @app.get("/api/sessions/{gw_id}/subagents")

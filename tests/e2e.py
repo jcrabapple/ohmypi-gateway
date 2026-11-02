@@ -35,6 +35,19 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         failures.append(name)
 
 
+def req_bytes(path: str, token=TOKEN):
+    """GET returning the raw body (the JSON helper above parses everything)."""
+    h = dict(UA)
+    if token:
+        h["Authorization"] = "Bearer " + token
+    r = urllib.request.Request(BASE + path, method="GET", headers=h)
+    try:
+        with urllib.request.urlopen(r, timeout=120) as resp:
+            return resp.status, resp.read(), resp.headers
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), e.headers
+
+
 def _parse(body: bytes):
     try:
         return json.loads(body or b"null")
@@ -522,6 +535,53 @@ try:
     check("files-prefix-is-file-422", code == 422, f"-> {code}")
     code, _, _ = req("GET", f"/api/sessions/{fg}/files?prefix=does-not-exist")
     check("files-missing-404", code == 404, f"-> {code}")
+
+    # ------------------------------------------------- artifact download/upload
+    code, body, hdrs = req_bytes(f"/api/sessions/{fg}/file?path=alpha.txt")
+    check("file-download-200", code == 200 and body == b"a", f"-> {code} {body!r}")
+    check("file-download-disposition",
+          "attachment" in (hdrs.get("Content-Disposition") or "")
+          and "alpha.txt" in (hdrs.get("Content-Disposition") or ""), hdrs.get("Content-Disposition"))
+    check("file-download-no-store", (hdrs.get("Cache-Control") or "") == "private, no-store",
+          hdrs.get("Cache-Control"))
+    for probe, label, want in (("../e2e.py", "dotdot", 422), ("/etc/passwd", "absolute", 422),
+                               ("", "empty", 422), ("beta", "directory", 415),
+                               ("does-not-exist.txt", "missing", 404)):
+        code, _, _ = req("GET", f"/api/sessions/{fg}/file?path={urllib.request.quote(probe)}")
+        check(f"file-download-{label}", code == want, f"-> {code}")
+    (fdir / "escape-link.txt").symlink_to("/etc/hostname")
+    try:
+        code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=escape-link.txt")
+        check("file-download-symlink-escape-403", code == 403, f"-> {code}")
+    finally:
+        (fdir / "escape-link.txt").unlink(missing_ok=True)
+    code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=alpha.txt", token=None)
+    check("file-download-needs-auth", code == 401, f"-> {code}")
+
+    code, data, _ = req("POST", f"/api/sessions/{fg}/upload?name=e2e-up.txt", raw=b"uploaded")
+    check("upload-ok", code == 200 and data.get("name") == "e2e-up.txt"
+          and data.get("size") == 8, f"-> {code} {data}")
+    check("upload-landed", (fdir / "e2e-up.txt").read_bytes() == b"uploaded")
+    code, _, _ = req("POST", f"/api/sessions/{fg}/upload?name=e2e-up.txt", raw=b"again")
+    check("upload-existing-409", code == 409, f"-> {code}")
+    code, _, _ = req("POST", f"/api/sessions/{fg}/upload?name=e2e-up.txt&overwrite=true", raw=b"again")
+    check("upload-overwrite-200", code == 200 and (fdir / "e2e-up.txt").read_bytes() == b"again", f"-> {code}")
+    code, data, _ = req("POST", f"/api/sessions/{fg}/upload?name=nested.txt&dir=beta", raw=b"n")
+    check("upload-subdir", code == 200 and data.get("path") == "beta/nested.txt"
+          and (fdir / "beta" / "nested.txt").exists(), f"-> {code} {data}")
+    for probe, label, want in (("name=.env", "dotfile", 422),
+                               ("name=ok.txt&dir=..%2F", "escape-dir", 422),
+                               ("name=ok.txt&dir=%2Fetc", "absolute-dir", 422),
+                               ("name=ok.txt&dir=missing", "missing-dir", 404),
+                               ("name=", "no-name", 422)):
+        code, _, _ = req("POST", f"/api/sessions/{fg}/upload?{probe}", raw=b"x")
+        check(f"upload-{label}", code == want, f"-> {code}")
+    code, _, _ = req("POST", f"/api/sessions/{fg}/upload?name=e2e-anon.txt", raw=b"x", token=None)
+    check("upload-needs-auth", code == 401, f"-> {code}")
+    req("POST", f"/api/sessions/{fg}/upload?name=page.html", raw=b"<h1>x</h1>")
+    code, _, hdrs = req_bytes(f"/api/sessions/{fg}/file?path=page.html")
+    check("file-download-html-is-octet-stream",
+          (hdrs.get("Content-Type") or "").startswith("application/octet-stream"), hdrs.get("Content-Type"))
 finally:
     req("DELETE", f"/api/sessions/{fg}")
     shutil.rmtree(fdir, ignore_errors=True)
@@ -808,6 +868,53 @@ try:
           and isinstance(data.get("removedPointers"), int), f"-> {code} {data}")
 finally:
     req("DELETE", f"/api/sessions/{gid}")
+
+# ------------------------------------------------------------------ memory
+# Reads are safe on any host; writes are covered by tests/test_memory.py against
+# a throwaway store. Here we pin the HTTP contract and the auth boundary.
+
+code, _, _ = req("GET", "/api/memory", token=None)
+check("memory-needs-auth", code == 401, f"-> {code}")
+code, data, _ = req("GET", "/api/memory")
+check("memory-stats-shape",
+      code == 200 and isinstance(data, dict) and set(data.get("counts", {})) ==
+      {"note", "skill", "tag", "edges"} and isinstance(data.get("hot"), list)
+      and isinstance(data.get("root"), str), f"-> {code} {data}")
+code, data, _ = req("GET", "/api/memory/notes?limit=5")
+check("memory-search-shape", code == 200 and isinstance(data.get("notes"), list),
+      f"-> {code} {(data or {}).get('notes') is not None}")
+code, data, _ = req("GET", "/api/memory/notes?q=%22%22&limit=3")
+check("memory-search-bad-syntax-survives", code == 200 and isinstance(data.get("notes"), list),
+      f"-> {code}")
+code, _, _ = req("GET", "/api/memory/notes/e2e-no-such-note")
+check("memory-note-unknown-404", code == 404, f"-> {code}")
+code, _, _ = req("GET", "/api/memory/notes/..%2F..%2Fetc%2Fpasswd")
+check("memory-note-traversal-4xx", code in (404, 422), f"-> {code}")
+code, data, _ = req("GET", "/api/memory/recall?limit=5")
+check("memory-recall-shape", code == 200 and isinstance(data.get("rows"), list)
+      and isinstance(data.get("banks"), int), f"-> {code}")
+code, _, _ = req("POST", "/api/memory/notes", {"title": "", "body": "x"})
+check("memory-save-empty-title-422", code == 422, f"-> {code}")
+code, _, _ = req("POST", "/api/memory/notes", {"title": "x", "tags": "not-a-list"})
+check("memory-save-bad-tags-422", code == 422, f"-> {code}")
+code, _, _ = req("POST", "/api/memory/notes", {"id": "e2e-no-such-note", "title": "x", "body": "y"})
+check("memory-save-unknown-id-404", code == 404, f"-> {code}")
+
+# ------------------------------------------------------------------ plugins
+code, _, _ = req("GET", "/api/plugins", token=None)
+check("plugins-needs-auth", code == 401, f"-> {code}")
+code, data, _ = req("GET", "/api/plugins")
+check("plugins-shape", code == 200 and isinstance(data.get("installed"), list)
+      and isinstance(data.get("npm"), list), f"-> {code} {data}")
+code, _, _ = req("POST", "/api/plugins/action", {"action": "explode", "target": "x"})
+check("plugins-bad-action-422", code == 422, f"-> {code}")
+code, _, _ = req("POST", "/api/plugins/action", {"action": "install", "target": "--force"})
+check("plugins-flag-target-422", code == 422, f"-> {code}")
+code, _, _ = req("POST", "/api/plugins/action", {"action": "install", "target": "a; rm -rf /"})
+check("plugins-injection-target-422", code == 422, f"-> {code}")
+code, data, _ = req("POST", "/api/plugins/action", {"action": "doctor"})
+check("plugins-doctor-200", code == 200 and isinstance(data.get("ok"), bool)
+      and "output" in data, f"-> {code}")
 
 # ------------------------------------------------------------ collab discovery
 
