@@ -83,9 +83,11 @@ def resolve_file(cwd: str, rel: str) -> Path:
         raise ArtifactError("path cannot be resolved", 422) from None
     if not _inside(cwd_real, target):
         raise ArtifactError("path escapes the session directory", 403)
-    # Refused before any existence check: a hidden folder or a known secret file
-    # is out of scope whether or not it happens to be there.
-    _reject_sensitive(Path(*parts))
+    # Judged on the RESOLVED path relative to the cwd, not the raw segments: a
+    # symlink called "notes.txt" that points at auth-token must be refused just
+    # like the name would be. Done before any existence check so presence is not
+    # revealed.
+    _reject_sensitive(Path(target).relative_to(cwd_real))
     path = Path(target)
     if not path.exists():
         raise ArtifactError("no such file", 404)
@@ -110,8 +112,9 @@ def resolve_dir(cwd: str, rel: str) -> Path:
     if not _inside(cwd_real, target):
         raise ArtifactError("path escapes the session directory", 403)
     # A hidden folder is not an upload target, present or not: .git/hooks and
-    # .ssh are the difference between "put a file in my project" and running code.
-    if any(part.startswith(".") for part in parts):
+    # .ssh are the difference between "put a file in my project" and running
+    # code. Resolved, so a symlink to .git/hooks is refused as well.
+    if any(part.startswith(".") for part in Path(target).relative_to(cwd_real).parts):
         raise ArtifactError("hidden folders are not upload targets", 403)
     if not os.path.isdir(target):
         raise ArtifactError("no such directory", 404)
@@ -132,6 +135,14 @@ def safe_filename(name: str) -> str:
         raise ArtifactError("filenames may not start with a dot", 422)
     if len(leaf) > MAX_NAME:
         raise ArtifactError("filename is too long", 422)
+    return leaf
+
+
+def check_upload_name(filename: str) -> str:
+    """Validate a leaf name without touching the filesystem or the body."""
+    leaf = safe_filename(filename)
+    if leaf in _DENY_NAMES:
+        raise ArtifactError("that file is not writable here", 403)
     return leaf
 
 

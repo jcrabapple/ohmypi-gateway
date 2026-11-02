@@ -215,6 +215,14 @@ class MemoryStoreTest(unittest.TestCase):
         second = memory._mint_id(self.root, "Some Long Title: Part 2!")
         self.assertNotEqual(first, second)
 
+    def test_title_with_dashes_survives_a_read(self):
+        # A plain split("---") ends the block at the title's own dashes.
+        path = self.root / "notes" / "note-dashes.md"
+        path.write_text("---\nid: note-dashes\ntitle: Phase 1 --- Initial Design\n---\n\nbody here\n")
+        meta, body = memory._parse_frontmatter(path.read_text())
+        self.assertEqual(meta["title"], "Phase 1 --- Initial Design")
+        self.assertEqual(body, "body here")
+
     def test_frontmatter_round_trip(self):
         text = memory._compose("Title", ["a", "b"], ["skill:x"], "body\n", "note-n1")
         meta, body = memory._parse_frontmatter(text)
@@ -271,6 +279,9 @@ class EpisodicTest(unittest.TestCase):
         conn.close()
         res = memory.episodic("", 10)
         self.assertIn("e4", [r["id"] for r in res["rows"]])
+        # The response is always text: clients format it with string methods.
+        for row in res["rows"]:
+            self.assertTrue(row["timestamp"] is None or isinstance(row["timestamp"], str), row)
 
     def test_missing_store_is_empty_not_an_error(self):
         os.environ["OMPGW_MNEMOPI_DIR"] = str(Path(self._tmp.name) / "absent")

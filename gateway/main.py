@@ -1410,6 +1410,9 @@ async def session_upload(gw_id: str, request: Request, name: str = "", dir: str 
     the raw bytes: no multipart dependency, and the browser can send a Blob
     straight from a file input."""
     sess = get_session_or_404(gw_id)
+    # Name and folder first: a bad name should cost nothing.
+    artifacts.check_upload_name(name)
+    artifacts.resolve_dir(sess.cwd, dir or "")
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > artifacts.MAX_UPLOAD_BYTES:
         raise HTTPException(413, f"file is larger than "

@@ -205,17 +205,24 @@ def search(q: str = "", limit: int = 20, root: Path | None = None) -> dict:
     return {"query": q, "notes": rows}
 
 
+FRONTMATTER_FENCE = re.compile(r"^---[ \t]*$", re.MULTILINE)
+
+
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Split the fence on lines that are exactly '---'. A title containing dashes
+    (e.g. "Phase 1 --- Initial Design") must not end the block early, which a
+    plain split("---") would do."""
     meta: dict[str, str] = {}
     body = text
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) == 3:
-            for line in parts[1].strip().splitlines():
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    meta[k.strip()] = v.strip()
-            body = parts[2].strip()
+    fences = list(FRONTMATTER_FENCE.finditer(text))
+    if text.startswith("---") and len(fences) >= 2:
+        head_start = fences[0].end()
+        head_end = fences[1].start()
+        for line in text[head_start:head_end].splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                meta[k.strip()] = v.strip()
+        body = text[fences[1].end():].strip()
     return meta, body
 
 
@@ -411,7 +418,10 @@ def episodic(q: str = "", limit: int = 20) -> dict:
                     "id": row["id"], "bank": bank,
                     "content": (row["content"] or "")[:2000],
                     "source": row["source"], "importance": row["importance"],
-                    "scope": row["scope"], "timestamp": row["timestamp"],
+                    "scope": row["scope"],
+                    # Column type is not enforced across old banks: epoch ints
+                    # exist. Clients format this as text, so always send text.
+                    "timestamp": None if row["timestamp"] is None else str(row["timestamp"]),
                 })
         except sqlite3.Error:
             continue

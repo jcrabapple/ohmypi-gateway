@@ -559,10 +559,15 @@ try:
     check("file-download-needs-auth", code == 401, f"-> {code}")
     # Secrets and hidden folders are out of scope for this route.
     (fdir / "auth-token").write_text("secret")
+    (fdir / "innocent.txt").symlink_to(fdir / "auth-token")
     try:
         code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=auth-token")
         check("file-download-refuses-gateway-token", code == 403, f"-> {code}")
+        # Refused on the resolved target, not on the link's own name.
+        code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=innocent.txt")
+        check("file-download-refuses-symlinked-secret", code == 403, f"-> {code}")
     finally:
+        (fdir / "innocent.txt").unlink(missing_ok=True)
         (fdir / "auth-token").unlink(missing_ok=True)
     code, _, _ = req("GET", f"/api/sessions/{fg}/file?path=.hidden")
     check("file-download-refuses-dotfile", code == 403, f"-> {code}")

@@ -325,7 +325,7 @@
             <li class="ep">
               <span class="top">
                 <span class="bank mono">{row.bank}</span>
-                {#if row.timestamp}<span class="when">{row.timestamp.slice(0, 16).replace('T', ' ')}</span>{/if}
+                {#if row.timestamp}<span class="when">{String(row.timestamp).slice(0, 16).replace('T', ' ')}</span>{/if}
               </span>
               <pre class="content">{row.content}</pre>
             </li>

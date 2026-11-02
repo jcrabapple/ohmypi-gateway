@@ -48,6 +48,22 @@ class ResolveFileTest(unittest.TestCase):
                 artifacts.resolve_file(str(self.cwd), probe)
             self.assertEqual(e.exception.status, 403)
 
+    def test_symlink_to_a_secret_is_refused(self):
+        # The check has to judge the resolved target, not the link's own name.
+        (self.cwd / "auth-token").write_text("secret")
+        (self.cwd / "innocent.txt").symlink_to(self.cwd / "auth-token")
+        with self.assertRaises(ArtifactError) as e:
+            artifacts.resolve_file(str(self.cwd), "innocent.txt")
+        self.assertEqual(e.exception.status, 403)
+
+    def test_symlink_into_a_hidden_folder_is_refused(self):
+        (self.cwd / ".ssh").mkdir()
+        (self.cwd / ".ssh" / "id_rsa").write_text("key")
+        (self.cwd / "keys").symlink_to(self.cwd / ".ssh", target_is_directory=True)
+        with self.assertRaises(ArtifactError) as e:
+            artifacts.resolve_file(str(self.cwd), "keys/id_rsa")
+        self.assertEqual(e.exception.status, 403)
+
     def test_gateway_credentials_are_refused(self):
         (self.cwd / "auth-token").write_text("secret")
         with self.assertRaises(ArtifactError) as e:
@@ -115,6 +131,25 @@ class SaveUploadTest(unittest.TestCase):
             with self.subTest(directory=directory), self.assertRaises(ArtifactError) as e:
                 artifacts.save_upload(str(self.cwd), directory, "x.txt", b"x")
             self.assertIn(e.exception.status, (403, 404))
+
+    def test_symlink_to_a_hidden_folder_is_not_an_upload_target(self):
+        (self.cwd / ".git" / "hooks").mkdir(parents=True)
+        (self.cwd / "hooks-link").symlink_to(self.cwd / ".git" / "hooks", target_is_directory=True)
+        with self.assertRaises(ArtifactError) as e:
+            artifacts.save_upload(str(self.cwd), "hooks-link", "pre-commit", b"#!/bin/sh\n")
+        self.assertEqual(e.exception.status, 403)
+        self.assertFalse((self.cwd / ".git" / "hooks" / "pre-commit").exists())
+
+    def test_check_upload_name_rejects_before_any_body(self):
+        self.assertEqual(artifacts.check_upload_name("ok.txt"), "ok.txt")
+        for bad in ("", ".env", "auth-token", "../x.txt"):
+            with self.subTest(bad=bad):
+                # Path components are stripped, so "../x.txt" -> x.txt is allowed.
+                if bad == "../x.txt":
+                    self.assertEqual(artifacts.check_upload_name(bad), "x.txt")
+                else:
+                    with self.assertRaises(ArtifactError):
+                        artifacts.check_upload_name(bad)
 
     def test_dangling_symlink_is_refused_even_with_overwrite(self):
         real = self.cwd.parent / "outside-target.txt"
