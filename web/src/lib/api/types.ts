@@ -61,6 +61,24 @@ export interface CatalogModels {
   models: CatalogModel[];
 }
 
+/** GET/PUT /api/config/model-roles: the `modelRoles` and `retry.fallbackChains`
+ *  blocks of the omp config file. `roles[role]` is a selector string
+ *  ("provider/model-id" with an optional ":level" thinking suffix,
+ *  comma-separated when a role lists several candidates); model-kind roles
+ *  (image, web, speech, dictation, judge) use their own selector form and
+ *  never carry fallback chains. */
+export interface ModelRolesState {
+  roles: Record<string, string>;
+  fallbacks: Record<string, string[]>;
+}
+
+/** PUT body: partial per-role update. A key present replaces that role's
+ *  value (or its fallback chain); null unsets it; roles left out keep theirs. */
+export interface ModelRolesChange {
+  roles?: Record<string, string | null>;
+  fallbacks?: Record<string, string[] | null>;
+}
+
 export interface SessionInfo {
   gwId: string;
   cwd: string;

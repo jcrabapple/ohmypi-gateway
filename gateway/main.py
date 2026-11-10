@@ -38,7 +38,7 @@ from .auth import (
     origin_allowed,
 )
 from . import collab, push  # noqa: E402  (no cycle: neither imports main)
-from . import artifacts, memory  # noqa: E402  (memory reads the store, never main)
+from . import artifacts, memory, model_roles  # noqa: E402  (memory reads the store, never main)
 
 from .bridge import (
     DEFAULT_APPROVAL_MODE,
@@ -281,6 +281,11 @@ async def artifact_error_handler(request: Request, exc: artifacts.ArtifactError)
     return JSONResponse({"error": exc.message}, status_code=exc.status)
 
 
+@app.exception_handler(model_roles.ModelRolesError)
+async def model_roles_error_handler(request: Request, exc: model_roles.ModelRolesError):
+    return JSONResponse({"error": exc.message}, status_code=exc.status)
+
+
 @app.exception_handler(memory.MemoryError_)
 async def memory_error_handler(request: Request, exc: memory.MemoryError_):
     return JSONResponse({"error": exc.message}, status_code=exc.status)
@@ -429,6 +434,53 @@ async def put_config(request: Request):
             raise HTTPException(400, f"omp rejected the config, reverted: {e.detail}")
     return {"ok": True, "keys": sorted((parsed or {}).keys()),
             "note": "running sessions keep their old settings until restarted"}
+
+
+@app.get("/api/config/model-roles")
+async def get_model_roles():
+    """The modelRoles and retry.fallbackChains blocks of config.yml: what the
+    Models settings page edits. A file that does not parse is a 409 here (the
+    raw-text editor on the Agent config page is the way out)."""
+    return model_roles.read_roles(CONFIG_FILE)
+
+
+@app.put("/api/config/model-roles")
+async def put_model_roles(request: Request):
+    """Partial per-role update of modelRoles and retry.fallbackChains. Each key
+    present in the body replaces that role's value (or its fallback chain);
+    null unsets it; roles left out keep their value. The edit is round-trip
+    (comments and formatting elsewhere survive) and omp re-validates the file:
+    a rejected write is reverted."""
+    roles, fallbacks = model_roles.validate_changes(await json_body(request))
+    async with _config_lock:
+        backup = CONFIG_FILE.with_name(model_roles.BACKUP_NAME)
+        existed = CONFIG_FILE.exists()
+        if existed:
+            backup.write_text(CONFIG_FILE.read_text())
+            old = CONFIG_FILE.read_text()
+        else:
+            old = ""
+        # validate_changes already vetted the input; only the file's own shape
+        # can fail here, and nothing is written when it does.
+        new_text = model_roles.edit(old, roles, fallbacks)
+        CONFIG_FILE.write_text(new_text)
+        try:
+            await acli("config", "get", "modelRoles", timeout=30)
+            await acli("config", "get", "retry.fallbackChains", timeout=30)
+        except HTTPException as e:
+            # Branch on whether the file existed BEFORE this write, never on
+            # backup.exists(): a backup can survive from an earlier write, and
+            # restoring it over a file omp just rejected would resurrect stale
+            # content (mutation-checked: the stale-backup test fails on the
+            # old branch). A file we created is removed; a file we replaced is
+            # restored from the backup we made of it.
+            if existed:
+                CONFIG_FILE.write_text(backup.read_text())
+            else:
+                CONFIG_FILE.unlink(missing_ok=True)
+            raise HTTPException(400, f"omp rejected the change, reverted: {e.detail}")
+        state = model_roles.parse_state(new_text)
+    return {"ok": True, **state, "note": "running sessions keep their old settings until restarted"}
 
 
 # --------------------------------------------------------------- catalog / cli

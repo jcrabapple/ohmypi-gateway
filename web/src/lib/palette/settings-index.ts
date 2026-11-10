@@ -29,7 +29,7 @@ export interface SettingsTarget {
 export const SETTINGS_PAGES: readonly SettingsPage[] = [
   { id: 'appearance', title: 'Appearance', blurb: 'Theme, accent, density, width and fonts' },
   { id: 'agent', title: 'Agent config', blurb: 'Edit the omp config file' },
-  { id: 'models', title: 'Models', blurb: 'Browse the model catalog' },
+  { id: 'models', title: 'Models', blurb: 'Model roles and the catalog' },
   { id: 'skills', title: 'Skills', blurb: 'Skills installed on the gateway host' },
   { id: 'memory', title: 'Memory', blurb: 'Notes, tags and links from the memory graph' },
   { id: 'plugins', title: 'Plugins', blurb: 'Install and remove omp plugins' },
@@ -46,6 +46,7 @@ export const SETTINGS_ENTRIES: readonly SettingsEntry[] = [
   { id: 'width', page: 'appearance', label: 'Transcript width', keywords: 'reading wide column measure' },
   { id: 'prose', page: 'appearance', label: 'Prose font', keywords: 'font sans mono monospace typeface text' },
   { id: 'config', page: 'agent', label: 'Agent config file', keywords: 'yaml config.yml editor save default model edit omp' },
+  { id: 'roles', page: 'models', label: 'Model roles', keywords: 'default fallback advisor auxiliary smol slow plan vision commit tiny memory task model role selector thinking unset' },
   { id: 'catalog', page: 'models', label: 'Model catalog', keywords: 'models provider context price search use switch' },
   { id: 'skill-list', page: 'skills', label: 'Installed skills', keywords: 'skill description installed' },
   { id: 'memory-search', page: 'memory', label: 'Search notes', keywords: 'memory notes recall search graph knowledge remember' },

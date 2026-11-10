@@ -3,6 +3,11 @@ fastapi==0.141.1
 uvicorn==0.54.0
 PyYAML==6.0.3
 
+# Round-trip YAML for /api/config/model-roles: edits the modelRoles and
+# retry.fallbackChains blocks of config.yml without dropping the comments and
+# formatting everywhere else (PyYAML cannot round-trip comments).
+ruamel.yaml==0.19.1
+
 # Optional: Web Push for "needs you" dialogs and collab attention asks.
 # Without it, push.available() reports False and every other feature runs.
 pywebpush==2.5.0

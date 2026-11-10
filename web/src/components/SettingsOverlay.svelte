@@ -5,6 +5,7 @@
   import { pageTitle, searchSettings, SETTINGS_PAGES, type SettingsPageId, type SettingsTarget } from '../lib/palette/settings-index';
   import { ui } from '../lib/state';
   import { configDraft } from '../lib/state/config-draft.svelte';
+  import { modelRolesDraft } from '../lib/state/model-roles-draft.svelte';
   import { confirm, Icon, Sheet } from '../lib/ui';
   import { viewport } from '../lib/ui/media.svelte';
   import AgentConfigPage from './settings/AgentConfigPage.svelte';
@@ -98,15 +99,16 @@
   onMount(() => {
     if (!deepLinked && !viewport.coarse) void tick().then(() => searchInput?.focus());
     ui.guard('settings', () => {
-      if (!configDraft.dirty) return true;
+      if (!configDraft.dirty && !modelRolesDraft.dirty) return true;
       void confirm({
         title: 'Discard unsaved changes',
-        body: 'The agent config has edits that were not saved.',
+        body: 'The agent config or the model roles have edits that were not saved.',
         confirmLabel: 'Discard',
         danger: true,
       }).then((ok) => {
         if (!ok) return;
         configDraft.discard();
+        modelRolesDraft.discard();
         ui.close('settings');
       });
       return false;

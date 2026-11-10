@@ -4,7 +4,7 @@ import { api, getBaseUrl, resetSignedOut } from './client';
 import type {
   ApprovalMode, CatalogModels, CommandsResponse, EntriesResponse, EpisodicResult, EventsResponse, FileIndexEntry,
   FilesResponse, ForkResponse, FsDirs, LedgerResponse, LedgerSessionsResponse, MemoryNote, MemorySaveResult,
-  MemorySearch, MemoryStats, MessagesResponse, PluginActionResult, PluginsResponse, QueueEntry, SavedSession,
+  MemorySearch, MemoryStats, MessagesResponse, ModelRolesChange, ModelRolesState, PluginActionResult, PluginsResponse, QueueEntry, SavedSession,
   SearchResponse, SessionInfo, SessionsList, SessionState, SessionStats, SubagentMessagesResponse, SystemInfo,
   ThinkingLevel, UiAnswer, UiRequest, UploadResult,
 } from './types';
@@ -53,6 +53,11 @@ export const host = {
   saveConfig: (yaml: string) =>
     api<{ ok?: boolean; note?: string }>('/api/config', {
       method: 'PUT', body: yaml, headers: { 'Content-Type': 'text/yaml' }, timeoutMs: 120_000,
+    }),
+  modelRoles: () => api<ModelRolesState>('/api/config/model-roles'),
+  saveModelRoles: (body: ModelRolesChange) =>
+    api<ModelRolesState & { ok?: boolean; note?: string }>('/api/config/model-roles', {
+      method: 'PUT', body, timeoutMs: 120_000,
     }),
   skills: () => api<{ installed: { name: string; description: string; symlink: boolean }[] }>('/api/skills'),
   usage: () => api<{ raw: string; error?: string }>('/api/usage', { timeoutMs: 120_000 }),

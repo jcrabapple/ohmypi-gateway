@@ -18,7 +18,8 @@ web/.vite/
 *.log
 
 # runtime state, if a deployment puts the ledger inside the tree
-state/
+# (anchored: an unanchored "state/" also swallowed web/src/lib/state/)
+/state/
 
 # personal deployment notes for this host: not part of the public project
 docs/BACKUP-PLAN.md

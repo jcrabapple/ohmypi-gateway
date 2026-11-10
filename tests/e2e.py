@@ -185,6 +185,25 @@ code, _, _ = req("PUT", "/api/config", raw=b"- just\n- a list\n", headers={"Cont
 check("config-rejects-non-mapping", code == 400)
 check("config-unchanged", ok("GET", "/api/config")["raw"] == cfg["raw"])
 
+code, r1, _ = req("GET", "/api/config/model-roles")
+check("model-roles-read", code == 200 and isinstance(r1.get("roles"), dict) and isinstance(r1.get("fallbacks"), dict))
+code, _, _ = req("PUT", "/api/config/model-roles", {})
+check("model-roles-empty-422", code == 422)
+code, _, _ = req("PUT", "/api/config/model-roles", {"roles": {"Default": "a/b"}})
+check("model-roles-bad-role-422", code == 422)
+code, _, _ = req("PUT", "/api/config/model-roles", {"roles": {"default": "not a selector"}})
+check("model-roles-bad-selector-422", code == 422)
+# Write the current state back: values identical, so the live config keeps its
+# meaning while the whole validate -> edit -> omp-check path runs.
+r2 = {"roles": dict(r1["roles"]), "fallbacks": {k: list(v) for k, v in r1["fallbacks"].items()}}
+code, data, _ = req("PUT", "/api/config/model-roles", r2)
+check("model-roles-write-roundtrip", code == 200 and bool(data and data.get("ok")))
+code, r3, _ = req("GET", "/api/config/model-roles")
+check("model-roles-unchanged", code == 200 and r3 == r1)
+# A same-value write must not disturb the file at all: no reindentation of
+# unrelated blocks, no comment churn.
+check("model-roles-config-byte-identical", ok("GET", "/api/config")["raw"] == cfg["raw"])
+
 code, data, _ = req("GET", "/api/catalog/models", timeout=180)
 models = data.get("models") if isinstance(data, dict) else None
 check("catalog-models", code == 200 and isinstance(models, list) and len(models) > 0, f"{len(models or [])} models")

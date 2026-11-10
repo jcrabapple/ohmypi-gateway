@@ -74,7 +74,8 @@ src/
                         diff2 (omp diff parser + per-file extraction), wordmarks
     composer/           slash filtering, send plan, images, drafts, modes, approval answers
     platform/           storage, idb, keyboard (--kb), haptics, notify, clipboard
-    state/              rune stores: auth, sessions (+ grouping), active, nav (hash routes), models, settings, plan, reviewed, ui
+    state/              rune stores: auth, sessions (+ grouping), active, nav (hash routes), models, settings,
+                        plan, reviewed, ui, config-draft, model-roles-draft
     ui/                 Sheet (native dialog), Popover, Adaptive, Menu, ConfirmDialog, Toasts,
                         Icon, Spinner, Kbd, longpress action, swipe, viewport media flags
     overlays.ts         registry for overlays (palette, settings, session-info, inspector), openSettings(target)
@@ -257,3 +258,29 @@ names redacted and long strings trimmed. Regenerate with
   dependency), and per-model / per-session tables. The 7/30/90-day selector refetches with an
   AbortController; stale numbers stay on screen until the new ones arrive. The rail footer gains
   a Usage button (chart glyph) next to Settings.
+
+## Model roles GUI
+
+- Settings → Models gains a "Model roles" section (`state/model-roles-draft.svelte.ts`): every
+  omp chat role (default, smol/slow/plan/vision/commit/tiny/memory/task, advisor) plus the
+  model-kind and custom roles the config actually sets.
+- Each row is the role id plus a stack: a model button showing the catalog **name** and provider
+  (click opens the model picker; the thinking level is a compact select beside it and is kept
+  when the new model supports it), the role hint, and its fallback chain as ordered chips.
+  Chains are editable for every role, including model-kind ones such as `web` (their values are
+  not chat models, so those rows stay text inputs). Chips show the provider only when two entries
+  share a display name, and a selector the catalog does not know gets a warning glyph rather than
+  a block: omp resolves at runtime, the GUI only shape-checks.
+- "Edit selectors" switches the whole section to raw selector strings (`@smol`, `provider/*`,
+  comma-separated candidate lists) without losing anything; a comma list always renders raw,
+  because one picker slot cannot represent several candidates.
+- Saves go to `PUT /api/config/model-roles`, a partial per-role update the gateway applies with
+  a ruamel round-trip so the rest of config.yml (comments included) survives, then omp
+  re-validates and the write reverts on rejection. Only roles that differ from the saved state
+  are sent. The save bar is sticky and appears only while there are changes; the settings-close
+  guard covers this draft the same way it covers the agent config.
+- The catalog is search-first and capped at 40 rows per page ("Show 40 more"), with provider
+  filter chips and a per-row `USED BY` list built from the current draft, so 1,800 models never
+  land in the DOM at once. Rows whose name is shared by two catalog ids show the id.
+- The role taxonomy is omp's (docs/models.md), not invented: "auxiliary" is `smol`, "fallback"
+  is `retry.fallbackChains`, the advisor has its own chain.

@@ -48,7 +48,8 @@ describe('CommandPalette', () => {
   it('filters as you type and drops the headings', async () => {
     const p = mountPalette();
     await p.type('parser');
-    expect(p.titles()).toEqual(['Fix the parser']);
+    // 'parser' also fuzzy-matches the Models settings page via the Model roles entry's keywords.
+    expect(p.titles()).toEqual(['Fix the parser', 'Models']);
     expect(p.target.querySelectorAll('.head')).toHaveLength(0);
   });
 
@@ -109,6 +110,6 @@ describe('CommandPalette', () => {
   it('announces the result count', async () => {
     const p = mountPalette();
     await p.type('parser');
-    expect(p.target.querySelector('[role="status"]')?.textContent).toBe('1 result');
+    expect(p.target.querySelector('[role="status"]')?.textContent).toBe('2 results');
   });
 });

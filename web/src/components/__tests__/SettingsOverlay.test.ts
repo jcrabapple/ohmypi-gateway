@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth, host } from '../../lib/api/endpoints';
 import { configDraft } from '../../lib/state/config-draft.svelte';
+import { modelRolesDraft } from '../../lib/state/model-roles-draft.svelte';
 import { ui } from '../../lib/state/ui.svelte';
 import SettingsOverlay from '../SettingsOverlay.svelte';
 import { buttonNamed, cleanup, render, settle } from './mount';
@@ -9,6 +10,7 @@ beforeEach(() => {
   vi.spyOn(host, 'system').mockReturnValue(new Promise(() => {}));
   vi.spyOn(auth, 'me').mockReturnValue(new Promise(() => {}));
   vi.spyOn(host, 'config').mockResolvedValue({ raw: 'a: 1\n', parsed: { a: 1 }, file: '/x/config.yml' });
+  vi.spyOn(host, 'modelRoles').mockResolvedValue({ roles: { default: 'a/b' }, fallbacks: {} });
 });
 afterEach(() => {
   cleanup();
@@ -17,6 +19,7 @@ afterEach(() => {
   ui.settingsAt = null;
   while (ui.overlays.length) ui.close();
   configDraft.discard();
+  modelRolesDraft.discard();
 });
 
 function mountSettings() {
@@ -122,6 +125,25 @@ describe('SettingsOverlay', () => {
     await settle();
     expect(ui.isOpen('settings')).toBe(false);
     expect(configDraft.dirty).toBe(false);
+  });
+
+  it('asks before closing with unsaved model roles, Discard throws them away', async () => {
+    mountSettings();
+    await modelRolesDraft.load();
+    modelRolesDraft.setRole('default', 'x/y');
+    expect(ui.tryClose('settings')).toBe(false);
+    expect(ui.isOpen('settings')).toBe(true);
+    expect(ui.confirmRequest?.title).toBe('Discard unsaved changes');
+    ui.answerConfirm(false);
+    await settle();
+    expect(ui.isOpen('settings')).toBe(true);
+    // Keep editing: the edit is still there and the guard still holds.
+    expect(modelRolesDraft.roles.default).toBe('x/y');
+    expect(ui.tryClose('settings')).toBe(false);
+    ui.answerConfirm(true);
+    await settle();
+    expect(ui.isOpen('settings')).toBe(false);
+    expect(modelRolesDraft.saved).toBeNull();
   });
 
   it('the Agent config page edits the shared draft and saves with Ctrl+S', async () => {
