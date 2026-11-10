@@ -817,7 +817,7 @@
     display: inline-flex;
     align-items: center;
     gap: var(--s-1);
-    min-height: 26px;
+    min-height: 32px;
     padding: 0 var(--s-2);
     border: 1px dashed var(--line-strong);
     border-radius: 999px;
