@@ -38,6 +38,7 @@ export const ICONS = {
   flag: '<path d="M5 21V4"/><path d="M5 4h11.5L14 7.5l2.5 3.5H5"/>',
   fork: '<circle cx="6" cy="5.5" r="2"/><circle cx="18" cy="5.5" r="2"/><circle cx="12" cy="18.5" r="2"/><path d="M6 7.5V11h12V7.5M12 11v5.5"/>',
   chart: '<path d="M4 20h16"/><path d="M7 16.5v-4.5M12 16.5v-10M17 16.5v-7"/>',
+  kanban: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15M14.5 4.5v15M6.5 9h0M6.5 12.5h0M12 9h0M17 9h0M17 12.5h0"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;

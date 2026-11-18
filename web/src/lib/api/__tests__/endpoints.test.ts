@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../client';
-import { browseDirs, sessionFiles, sessions } from '../endpoints';
+import { browseDirs, kanban, sessionFiles, sessions } from '../endpoints';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -70,5 +70,21 @@ describe('browseDirs', () => {
     const err = await browseDirs('/nope').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err).toMatchObject({ status: 404, message: 'no such folder' });
+  });
+});
+
+describe('kanban endpoints', () => {
+  it('encodes cwd on board GET and posts mutations to /api/kanban/*', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { boards: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    await kanban.board('/work/my proj');
+    const called = new URL((fetchMock.mock.calls[0] as unknown as [string])[0]!);
+    expect(called.pathname + called.search).toBe('/api/kanban?cwd=%2Fwork%2Fmy%20proj');
+
+    await kanban.add({ cwd: '/work/my proj', title: 'Task 1', column: 'todo' });
+    const [addUrl, addInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(new URL(addUrl).pathname).toBe('/api/kanban/add');
+    expect(addInit.method).toBe('POST');
+    expect(JSON.parse(String(addInit.body))).toEqual({ cwd: '/work/my proj', title: 'Task 1', column: 'todo' });
   });
 });

@@ -8,6 +8,7 @@
   import { viewport } from '../lib/ui/media.svelte';
   import { watchEdgeSwipe } from '../lib/ui/swipe';
   import Home from './Home.svelte';
+  import KanbanView from './KanbanView.svelte';
   import Overlays from './Overlays.svelte';
   import Rail from './Rail.svelte';
   import SearchView from './SearchView.svelte';
@@ -119,6 +120,8 @@
       <SearchView />
     {:else if nav.usage}
       <UsageView />
+    {:else if nav.kanban}
+      <KanbanView />
     {:else if nav.gwId}
       {#key nav.gwId}
         <SessionView gwId={nav.gwId} />

@@ -781,3 +781,70 @@ export interface UploadResult {
   path: string;
   size: number;
 }
+
+// -------------------------------------------------------------------- kanban
+export type KanbanColumnId = 'todo' | 'doing' | 'review' | 'done';
+
+export interface KanbanNote {
+  at: string;
+  text: string;
+}
+
+export interface KanbanTicket {
+  id: string;
+  title: string;
+  body: string;
+  column: KanbanColumnId;
+  priority: number;
+  tags: string[];
+  blocked_by: string[];
+  created: string;
+  updated: string;
+  notes: KanbanNote[];
+  claimed_by?: string;
+  claimed_at?: string;
+}
+
+export interface KanbanBoard {
+  version: number;
+  next_id: number;
+  columns: string[];
+  tickets: KanbanTicket[];
+  cwd: string;
+  path: string;
+  exists: boolean;
+}
+
+export interface KanbanBoardSummary {
+  cwd: string;
+  name: string;
+  path: string;
+  counts: Record<KanbanColumnId, number>;
+  total: number;
+  updated: string | null;
+}
+
+export interface KanbanBoardsResponse {
+  boards: KanbanBoardSummary[];
+}
+
+export interface KanbanTicketMutation {
+  ticket: KanbanTicket;
+  board: KanbanBoard;
+}
+
+export interface KanbanDeleteResponse {
+  deleted: KanbanTicket;
+  board: KanbanBoard;
+}
+
+export interface KanbanArchiveListResponse {
+  cwd: string;
+  tickets: KanbanTicket[];
+}
+
+export interface KanbanArchiveResponse {
+  moved: number;
+  archivedIds: string[];
+  board: KanbanBoard;
+}

@@ -2,6 +2,7 @@ export { active } from './active.svelte';
 export { auth } from './auth.svelte';
 export { groupSessions } from './grouping';
 export { modelCatalog } from './models.svelte';
+export { kanbanStore } from './kanban.svelte';
 export { nav } from './nav.svelte';
 export { plan } from './plan.svelte';
 export { reviewed } from './reviewed.svelte';

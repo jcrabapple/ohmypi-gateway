@@ -146,6 +146,29 @@ provider and model are stored per turn.
 | GET | `/ledger?days=&model=&provider=` | aggregates over the last `days` local calendar days (1..365, default 30); `model` accepts the bare model name or `provider/model`, `provider` is exact: `{days, totals: {turns, turnsOk, input, output, cacheRead, cacheWrite, cost}, perDay: [{date, input, output, cost}], perModel: [{provider, model, turns, input, output, cacheRead, cost}]}`. `perDay` is always exactly `days` entries, keyed by ISO date in the gateway's timezone, zero-filled, oldest first, so chart bars sum to the totals. Costs are raw sums of per-turn USD floats; clients round for display |
 | GET | `/ledger/sessions?days=` | per-session rollup (grouped by session name + cwd), newest activity first: `{days, sessions: [{sessionName, cwd, turns, input, output, cacheRead, cost, lastTs}]}` |
 
+
+### Kanban boards
+
+Per-project file-backed boards at `<cwd>/.omp/kanban/board.json` (and
+`archive.json`), wire-compatible with the `omp-kanban` extension. All writes
+serialize per board path and replace atomically. Columns are `todo`, `doing`,
+`review`, `done`; ticket ids are `K-<n>`; claims expire after 45 minutes and
+clear automatically when moved to `review` or `done`.
+
+| Method | Path | |
+|---|---|---|
+| GET | `/kanban/boards` | `{boards: [{cwd, name, path, counts: {todo, doing, review, done}, total, updated}]}` discovered under `~/projects` and live/saved session cwds |
+| GET | `/kanban?cwd=` | `{version, next_id, columns, tickets, cwd, path, exists}`. When `board.json` does not exist yet, returns an empty board with `exists: false` without creating the file |
+| POST | `/kanban/init` | `{cwd}` -> creates an empty `board.json` if absent; returns the board (`exists: true`) |
+| GET | `/kanban/archive?cwd=` | `{cwd, tickets}` from `<cwd>/.omp/kanban/archive.json` |
+| POST | `/kanban/add` | `{cwd, title, body?, column?, priority?, tags?, blocked_by?}` -> `{ticket, board}` |
+| POST | `/kanban/move` | `{cwd, id, column, position?}` -> `{ticket, board}` |
+| POST | `/kanban/update` | `{cwd, id, title?, body?, priority?, tags?, blocked_by?, column?, position?}` -> `{ticket, board}` |
+| POST | `/kanban/note` | `{cwd, id, text}` -> `{ticket, board}` |
+| POST | `/kanban/claim` | `{cwd, id, by?}` -> `{ticket, board}`; moves ticket to `doing`, 409 if held by another claimer inside the 45-minute TTL |
+| POST | `/kanban/release` | `{cwd, id, note?}` -> `{ticket, board}` |
+| POST | `/kanban/delete` | `{cwd, id}` -> `{deleted, board}` |
+| POST | `/kanban/archive` | `{cwd, older_than_days?}` (default `7`) -> `{moved, archivedIds, board}` |
 ### Web push ("needs you", and turns that end)
 
 When a blocking dialog (tool approval, question) becomes pending, or a turn

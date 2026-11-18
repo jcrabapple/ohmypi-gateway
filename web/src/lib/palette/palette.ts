@@ -43,6 +43,7 @@ export interface PaletteActions {
   resume(saved: SavedSession): void;
   openSettings(page: SettingsPageId): void;
   toggleTheme(): void;
+  openKanban(cwd?: string | null): void;
   compact(): void;
   stop(): void;
   rename(): void;
@@ -50,7 +51,6 @@ export interface PaletteActions {
   sessionChanges(): void;
   slash(command: SlashCommand): void;
 }
-
 export interface PaletteContext {
   live: readonly SessionInfo[];
   saved: readonly SavedSession[];
@@ -88,6 +88,10 @@ export function buildPaletteItems(ctx: PaletteContext): PaletteItem[] {
     id: 'a:theme', kind: 'action', title: 'Toggle light and dark theme', icon: 'sparkle',
     keywords: ['appearance', 'paper', 'terminal', 'color'], run: a.toggleTheme,
   });
+  items.push({
+    id: 'a:kanban', kind: 'action', title: 'Kanban boards', icon: 'kanban',
+    keywords: ['board', 'tickets', 'tasks', 'todo', 'project'], run: () => a.openKanban(null),
+  });
   if (open) {
     items.push(
       { id: 'a:info', kind: 'action', title: 'Session info', icon: 'info', keywords: ['details', 'cost', 'tokens', 'cwd'], run: a.sessionInfo },
@@ -100,6 +104,14 @@ export function buildPaletteItems(ctx: PaletteContext): PaletteItem[] {
         id: 'a:changes', kind: 'action', title: 'Session changes', icon: 'mark',
         sub: `${ctx.changesCount} ${ctx.changesCount === 1 ? 'file' : 'files'}`,
         keywords: ['diff', 'edits', 'files', 'changed', 'patches'], run: a.sessionChanges,
+      });
+    }
+    const openSess = live.find((s) => s.gwId === ctx.activeGwId);
+    if (openSess?.cwd) {
+      items.push({
+        id: 'a:session-kanban', kind: 'action', title: 'Project kanban board', icon: 'kanban',
+        sub: basename(openSess.cwd) || openSess.cwd,
+        keywords: ['board', 'tickets', 'tasks', 'todo'], run: () => a.openKanban(openSess.cwd),
       });
     }
   }

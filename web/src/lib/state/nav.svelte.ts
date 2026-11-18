@@ -8,6 +8,17 @@ import { ui } from './ui.svelte';
 const ROUTE = /^#\/s\/([\w-]+)(\/changes)?$/;
 const USAGE = '#/usage';
 const SEARCH = '#/search';
+const KANBAN_PREFIX = '#/kanban';
+
+export function parseKanbanHash(hash: string): { active: boolean; cwd: string | null } {
+  if (hash === KANBAN_PREFIX) return { active: true, cwd: null };
+  if (hash.startsWith(`${KANBAN_PREFIX}?`)) {
+    const params = new URLSearchParams(hash.slice(KANBAN_PREFIX.length + 1));
+    const cwd = params.get('cwd')?.trim() || null;
+    return { active: true, cwd };
+  }
+  return { active: false, cwd: null };
+}
 
 export interface HashRoute {
   gwId: string;
@@ -29,6 +40,9 @@ class Nav {
   usage = $state((globalThis.location?.hash ?? '') === USAGE);
   /** Gateway-wide transcript search page (`#/search`). */
   search = $state((globalThis.location?.hash ?? '') === SEARCH);
+  /** Project kanban boards (`#/kanban` or `#/kanban?cwd=...`). */
+  kanban = $state(parseKanbanHash(globalThis.location?.hash ?? '').active);
+  kanbanCwd = $state<string | null>(parseKanbanHash(globalThis.location?.hash ?? '').cwd);
   /** Saved session file being resumed right now, for the spinner on its row. */
   resuming = $state<string | null>(null);
   /** The last session that died on us, so the new-session sheet can offer its draft. */
@@ -38,10 +52,13 @@ class Nav {
   start(): () => void {
     const on = () => {
       const r = parseHash(location.hash);
+      const kb = parseKanbanHash(location.hash);
       this.gwId = r?.gwId ?? null;
       this.view = r?.changes ? 'changes' : 'transcript';
       this.usage = location.hash === USAGE;
       this.search = location.hash === SEARCH;
+      this.kanban = kb.active;
+      this.kanbanCwd = kb.cwd;
     };
     on();
     window.addEventListener('hashchange', on);
@@ -53,6 +70,8 @@ class Nav {
     this.view = 'transcript';
     this.usage = false;
     this.search = false;
+    this.kanban = false;
+    this.kanbanCwd = null;
     if (location.hash === `#/s/${gwId}`) this.gwId = gwId;
     else location.hash = `#/s/${gwId}`;
   }
@@ -61,6 +80,8 @@ class Nav {
   openUsage(): void {
     ui.close('drawer');
     this.search = false;
+    this.kanban = false;
+    this.kanbanCwd = null;
     if (location.hash === USAGE) this.usage = true;
     else location.hash = USAGE;
   }
@@ -69,8 +90,25 @@ class Nav {
   openSearch(): void {
     ui.close('drawer');
     this.usage = false;
+    this.kanban = false;
+    this.kanbanCwd = null;
     if (location.hash === SEARCH) this.search = true;
     else location.hash = SEARCH;
+  }
+
+  /** Project kanban boards (`#/kanban` or `#/kanban?cwd=...`). */
+  openKanban(cwd: string | null = null): void {
+    ui.close('drawer');
+    this.usage = false;
+    this.search = false;
+    const targetCwd = cwd?.trim() || null;
+    const targetHash = targetCwd ? `${KANBAN_PREFIX}?cwd=${encodeURIComponent(targetCwd)}` : KANBAN_PREFIX;
+    if (location.hash === targetHash) {
+      this.kanban = true;
+      this.kanbanCwd = targetCwd;
+    } else {
+      location.hash = targetHash;
+    }
   }
 
   /** The open session's per-session Changes page. */
@@ -79,13 +117,14 @@ class Nav {
     this.view = 'changes';
     this.usage = false;
     this.search = false;
+    this.kanban = false;
+    this.kanbanCwd = null;
     if (location.hash === `#/s/${gwId}/changes`) {
       this.gwId = gwId;
     } else {
       location.hash = `#/s/${gwId}/changes`;
     }
   }
-
   home(): void {
     ui.close('drawer');
     if (location.hash) history.pushState(null, '', location.pathname + location.search);
@@ -93,6 +132,8 @@ class Nav {
     this.view = 'transcript';
     this.usage = false;
     this.search = false;
+    this.kanban = false;
+    this.kanbanCwd = null;
   }
 
   /** Resume a saved transcript. If omp is already running it, open the live session instead. */

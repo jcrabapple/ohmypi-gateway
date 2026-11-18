@@ -125,6 +125,9 @@
   );
   const items = $derived<MenuItem[]>([
     ...(reviewItem ? [reviewItem] : []),
+    ...(info?.cwd
+      ? [{ id: 'kanban', label: 'Kanban board', icon: 'kanban' as const, onselect: () => nav.openKanban(info.cwd) }]
+      : []),
     { id: 'files', label: 'Files', icon: 'file', onselect: () => openOverlay('files') },
     { id: 'info', label: 'Session info', icon: 'info', onselect: () => openOverlay('session-info') },
     { id: 'compact', label: 'Compact', icon: 'compress', disabled: busy.compacting || active.running, onselect: compactSession },

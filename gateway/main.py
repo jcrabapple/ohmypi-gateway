@@ -39,7 +39,7 @@ from .auth import (
     origin_allowed,
 )
 from . import collab, push  # noqa: E402  (no cycle: neither imports main)
-from . import artifacts, memory, model_roles  # noqa: E402  (memory reads the store, never main)
+from . import artifacts, kanban, memory, model_roles  # noqa: E402  (memory/kanban read the store, never main)
 
 from .bridge import (
     DEFAULT_APPROVAL_MODE,
@@ -302,6 +302,10 @@ async def model_roles_error_handler(request: Request, exc: model_roles.ModelRole
 async def memory_error_handler(request: Request, exc: memory.MemoryError_):
     return JSONResponse({"error": exc.message}, status_code=exc.status)
 
+
+@app.exception_handler(kanban.KanbanError)
+async def kanban_error_handler(request: Request, exc: kanban.KanbanError):
+    return JSONResponse({"error": exc.message}, status_code=exc.status)
 
 @app.exception_handler(ProcessDead)
 async def process_dead_handler(request: Request, exc: ProcessDead):
@@ -848,6 +852,95 @@ def ledger_sessions(days: int = Query(DEFAULT_DAYS, ge=1, le=365)):
     """Per-session rollup (session name + cwd) behind the usage page's session table."""
     return get_ledger().session_rollup(days=days)
 
+
+
+# ------------------------------------------------------------------- kanban
+# Per-project file-backed boards (<cwd>/.omp/kanban/board.json). All writes
+# serialize per board path and replace atomically in a threadpool worker.
+
+def _known_kanban_cwds() -> list[str]:
+    cwds: list[str] = [s.cwd for s in get_manager().sessions.values() if s.cwd]
+    for row in collab.get_discovery().snapshot():
+        cwd = row.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            cwds.append(cwd)
+    for s in scan_saved_sessions(limit=200):
+        cwd = s.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            cwds.append(cwd)
+    return cwds
+
+
+@app.get("/api/kanban/boards")
+async def kanban_boards():
+    """Discover projects with a kanban board under ~/projects and known session cwds."""
+    cwds = await asyncio.to_thread(_known_kanban_cwds)
+    return await asyncio.to_thread(kanban.discover_boards, extra_cwds=cwds)
+
+
+@app.get("/api/kanban")
+async def kanban_board(cwd: str = Query(min_length=1)):
+    """Read `<cwd>/.omp/kanban/board.json`. Returns an empty board (`exists: false`) when absent."""
+    return await asyncio.to_thread(kanban.get_board, cwd)
+
+
+@app.post("/api/kanban/init")
+async def kanban_init(request: Request):
+    body = await json_body(request)
+    return await asyncio.to_thread(kanban.init_board, body.get("cwd"))
+
+
+@app.get("/api/kanban/archive")
+async def kanban_archive_list(cwd: str = Query(min_length=1)):
+    return await asyncio.to_thread(kanban.get_archive, cwd)
+
+
+@app.post("/api/kanban/add")
+async def kanban_add(request: Request):
+    body = await json_body(request)
+    return await asyncio.to_thread(kanban.add_ticket, body.get("cwd"), body)
+
+
+@app.post("/api/kanban/move")
+async def kanban_move(request: Request):
+    body = await json_body(request)
+    return await asyncio.to_thread(kanban.move_ticket, body.get("cwd"), body)
+
+
+@app.post("/api/kanban/update")
+async def kanban_update(request: Request):
+    body = await json_body(request)
+    return await asyncio.to_thread(kanban.update_ticket, body.get("cwd"), body)
+
+
+@app.post("/api/kanban/note")
+async def kanban_note(request: Request):
+    body = await json_body(request)
+    return await asyncio.to_thread(kanban.add_note, body.get("cwd"), body)
+
+
+@app.post("/api/kanban/claim")
+async def kanban_claim(request: Request):
+    body = await json_body(request)
+    return await asyncio.to_thread(kanban.claim_ticket, body.get("cwd"), body)
+
+
+@app.post("/api/kanban/release")
+async def kanban_release(request: Request):
+    body = await json_body(request)
+    return await asyncio.to_thread(kanban.release_ticket, body.get("cwd"), body)
+
+
+@app.post("/api/kanban/delete")
+async def kanban_delete(request: Request):
+    body = await json_body(request)
+    return await asyncio.to_thread(kanban.delete_ticket, body.get("cwd"), body)
+
+
+@app.post("/api/kanban/archive")
+async def kanban_archive(request: Request):
+    body = await json_body(request)
+    return await asyncio.to_thread(kanban.archive_tickets, body.get("cwd"), body)
 
 # ------------------------------------------------------------------- sessions
 

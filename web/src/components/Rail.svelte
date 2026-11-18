@@ -278,6 +278,16 @@
     <button
       type="button"
       class="icon-btn"
+      aria-label="Kanban boards"
+      title="Kanban boards"
+      aria-pressed={nav.kanban}
+      onclick={() => nav.openKanban(null)}
+    >
+      <Icon name="kanban" />
+    </button>
+    <button
+      type="button"
+      class="icon-btn"
       aria-label="Usage"
       title="Usage"
       aria-pressed={nav.usage}

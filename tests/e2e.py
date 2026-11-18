@@ -997,5 +997,32 @@ check("collab-link-bad-generation-422", code == 422, f"-> {code}")
 code, data, _ = req("POST", "/api/collab/nonexistent/link", {"generation": 1, "access": "root"})
 check("collab-link-bad-access-422", code == 422, f"-> {code}")
 
+# ------------------------------------------------------------------ kanban
+code, _, _ = req("GET", "/api/kanban/boards", token=None)
+check("kanban-needs-auth", code == 401, f"-> {code}")
+code, data, _ = req("GET", "/api/kanban/boards")
+check("kanban-boards-shape", code == 200 and isinstance((data or {}).get("boards"), list),
+      f"-> {code} {data}")
+with tempfile.TemporaryDirectory() as ktmp:
+    kcwd = urllib.request.quote(ktmp)
+    code, data, _ = req("GET", f"/api/kanban?cwd={kcwd}")
+    check("kanban-missing-empty", code == 200 and data.get("exists") is False and data.get("tickets") == [],
+          f"-> {code} {data}")
+    code, data, _ = req("POST", "/api/kanban/add", {"cwd": ktmp, "title": "E2E ticket", "tags": ["e2e"]})
+    check("kanban-add", code == 200 and data.get("ticket", {}).get("id") == "K-1", f"-> {code} {data}")
+    code, data, _ = req("POST", "/api/kanban/claim", {"cwd": ktmp, "id": "K-1", "by": "e2e-a"})
+    check("kanban-claim", code == 200 and data.get("ticket", {}).get("column") == "doing", f"-> {code}")
+    code, _, _ = req("POST", "/api/kanban/claim", {"cwd": ktmp, "id": "K-1", "by": "e2e-b"})
+    check("kanban-claim-conflict-409", code == 409, f"-> {code}")
+    code, data, _ = req("POST", "/api/kanban/move", {"cwd": ktmp, "id": "K-1", "column": "review"})
+    check("kanban-move-clears-claim", code == 200 and "claimed_by" not in (data.get("ticket") or {}),
+          f"-> {code}")
+    code, data, _ = req("POST", "/api/kanban/note", {"cwd": ktmp, "id": "K-1", "text": "verified"})
+    check("kanban-note", code == 200 and len((data.get("ticket") or {}).get("notes") or []) == 1, f"-> {code}")
+    code, data, _ = req("POST", "/api/kanban/delete", {"cwd": ktmp, "id": "K-1"})
+    check("kanban-delete", code == 200 and data.get("deleted", {}).get("id") == "K-1", f"-> {code}")
+    code, _, _ = req("POST", "/api/kanban/add", {"cwd": ktmp, "title": ""})
+    check("kanban-empty-title-422", code == 422, f"-> {code}")
+
 print(f"\n{BASE}: " + ("all green" if not failures else f"FAILURES: {failures}"))
 sys.exit(1 if failures else 0)

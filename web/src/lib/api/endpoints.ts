@@ -3,8 +3,10 @@
 import { api, getBaseUrl, resetSignedOut } from './client';
 import type {
   ApprovalMode, CatalogModels, CommandsResponse, EntriesResponse, EpisodicResult, EventsResponse, FileIndexEntry,
-  FilesResponse, ForkResponse, FsDirs, LedgerResponse, LedgerSessionsResponse, MemoryNote, MemorySaveResult,
-  MemorySearch, MemoryStats, MessagesResponse, ModelRolesChange, ModelRolesState, PluginActionResult, PluginsResponse, QueueEntry, SavedSession,
+  FilesResponse, ForkResponse, FsDirs, KanbanArchiveListResponse, KanbanArchiveResponse, KanbanBoard,
+  KanbanBoardsResponse, KanbanColumnId, KanbanDeleteResponse, KanbanTicketMutation, LedgerResponse,
+  LedgerSessionsResponse, MemoryNote, MemorySaveResult, MemorySearch, MemoryStats, MessagesResponse,
+  ModelRolesChange, ModelRolesState, PluginActionResult, PluginsResponse, QueueEntry, SavedSession,
   SearchResponse, SessionInfo, SessionsList, SessionLog, SessionState, SessionStats, SubagentMessagesResponse, SystemInfo,
   ThinkingLevel, UiAnswer, UiRequest, UploadResult,
 } from './types';
@@ -182,6 +184,47 @@ export const plugins = {
   list: (signal?: AbortSignal) => api<PluginsResponse>('/api/plugins', { signal }),
   action: (action: 'install' | 'uninstall' | 'enable' | 'disable' | 'doctor', target = '') =>
     api<PluginActionResult>('/api/plugins/action', { method: POST, body: { action, target }, timeoutMs: 620_000 }),
+};
+
+export const kanban = {
+  boards: (signal?: AbortSignal) => api<KanbanBoardsResponse>('/api/kanban/boards', { signal }),
+  board: (cwd: string, signal?: AbortSignal) =>
+    api<KanbanBoard>(`/api/kanban?cwd=${encodeURIComponent(cwd)}`, { signal }),
+  init: (cwd: string) => api<KanbanBoard>('/api/kanban/init', { method: POST, body: { cwd } }),
+  archiveList: (cwd: string, signal?: AbortSignal) =>
+    api<KanbanArchiveListResponse>(`/api/kanban/archive?cwd=${encodeURIComponent(cwd)}`, { signal }),
+  add: (body: {
+    cwd: string;
+    title: string;
+    body?: string;
+    column?: KanbanColumnId;
+    priority?: number;
+    tags?: string[];
+    blocked_by?: string[];
+  }) => api<KanbanTicketMutation>('/api/kanban/add', { method: POST, body }),
+  move: (body: { cwd: string; id: string; column: KanbanColumnId; position?: number }) =>
+    api<KanbanTicketMutation>('/api/kanban/move', { method: POST, body }),
+  update: (body: {
+    cwd: string;
+    id: string;
+    title?: string;
+    body?: string;
+    priority?: number;
+    tags?: string[];
+    blocked_by?: string[];
+    column?: KanbanColumnId;
+    position?: number;
+  }) => api<KanbanTicketMutation>('/api/kanban/update', { method: POST, body }),
+  note: (body: { cwd: string; id: string; text: string }) =>
+    api<KanbanTicketMutation>('/api/kanban/note', { method: POST, body }),
+  claim: (body: { cwd: string; id: string; by?: string }) =>
+    api<KanbanTicketMutation>('/api/kanban/claim', { method: POST, body }),
+  release: (body: { cwd: string; id: string; note?: string }) =>
+    api<KanbanTicketMutation>('/api/kanban/release', { method: POST, body }),
+  delete: (body: { cwd: string; id: string }) =>
+    api<KanbanDeleteResponse>('/api/kanban/delete', { method: POST, body }),
+  archive: (body: { cwd: string; older_than_days?: number }) =>
+    api<KanbanArchiveResponse>('/api/kanban/archive', { method: POST, body }),
 };
 
 /** Subfolders of one folder on the gateway host, for the New session picker.

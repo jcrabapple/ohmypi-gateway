@@ -5,7 +5,7 @@ import { command, saved, session } from './factories';
 function actions(): PaletteActions {
   return {
     newSession: vi.fn(), nextAttention: vi.fn(), openSession: vi.fn(), resume: vi.fn(), openSettings: vi.fn(),
-    toggleTheme: vi.fn(), compact: vi.fn(), stop: vi.fn(), rename: vi.fn(), sessionInfo: vi.fn(),
+    toggleTheme: vi.fn(), openKanban: vi.fn(), compact: vi.fn(), stop: vi.fn(), rename: vi.fn(), sessionInfo: vi.fn(),
     sessionChanges: vi.fn(), slash: vi.fn(),
   };
 }
@@ -95,6 +95,12 @@ describe('buildPaletteItems', () => {
     expect(a.openSettings).toHaveBeenCalledWith('agent');
     expect(a.slash).toHaveBeenCalledWith(expect.objectContaining({ name: 'x' }));
     expect(a.stop).toHaveBeenCalled();
+    items.find((i) => i.id === 'a:kanban')!.run();
+    expect(a.openKanban).toHaveBeenCalledWith(null);
+    const sessionKanban = buildPaletteItems(ctx({ actions: a, live: [session('a', { cwd: '/work/proj' })], activeGwId: 'a' }))
+      .find((i) => i.id === 'a:session-kanban')!;
+    sessionKanban.run();
+    expect(a.openKanban).toHaveBeenCalledWith('/work/proj');
   });
 });
 

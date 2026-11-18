@@ -243,6 +243,7 @@ export function paletteActions(): PaletteActions {
     resume: (saved) => void nav.resume(saved),
     openSettings: (page) => openSettings({ page }),
     toggleTheme,
+    openKanban: (cwd) => nav.openKanban(cwd ?? null),
     compact: () => void compactSession(),
     stop: () => void stopActiveSession(),
     rename: askRename,

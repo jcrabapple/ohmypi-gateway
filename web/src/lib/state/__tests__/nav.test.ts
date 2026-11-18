@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nav, parseHash } from '../nav.svelte';
+import { nav, parseHash, parseKanbanHash } from '../nav.svelte';
 
 describe('parseHash', () => {
   it('reads the session id and the changes suffix', () => {
@@ -33,6 +33,24 @@ describe('nav view', () => {
     const stop = nav.start();
     nav.openChanges('route3');
     expect(nav.view).toBe('changes');
+    stop();
+  });
+});
+
+describe('kanban routing', () => {
+  it('parses #/kanban and #/kanban?cwd=...', () => {
+    expect(parseKanbanHash('#/kanban')).toEqual({ active: true, cwd: null });
+    expect(parseKanbanHash('#/kanban?cwd=%2Fwork%2Fapp')).toEqual({ active: true, cwd: '/work/app' });
+    expect(parseKanbanHash('#/s/abc')).toEqual({ active: false, cwd: null });
+  });
+
+  it('openKanban navigates between index and project board', () => {
+    location.hash = '#/s/route1';
+    const stop = nav.start();
+    nav.openKanban('/work/proj');
+    expect(location.hash).toBe('#/kanban?cwd=%2Fwork%2Fproj');
+    nav.openKanban(null);
+    expect(location.hash).toBe('#/kanban');
     stop();
   });
 });
