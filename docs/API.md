@@ -214,7 +214,7 @@ session is a transcript on disk that can be resumed.
 | Method | Path | |
 |---|---|---|
 | GET | `/sessions?limit=&include_saved=` | `{live: [...], saved: [...], external: [...]}` (`external` below) |
-| POST | `/sessions` | start: `{cwd?, model?, thinking?, approvalMode?, resumeFrom?, advisor?}`. `approvalMode` is `yolo` (default) \| `write` \| `always-ask`. `resumeFrom` must be a file under `~/.omp/agent/sessions` (see Resuming below). `advisor` (default false) launches the child with `--advisor` (omp's advisor runtime); launch-time only — no mid-session toggle, carried through forks |
+| POST | `/sessions` | start: `{cwd?, model?, thinking?, approvalMode?, resumeFrom?, advisor?}`. `approvalMode` is `yolo` (default) \| `write` \| `always-ask` \| `always-ask-cached` (omp remembers grants per tool). `resumeFrom` must be a file under `~/.omp/agent/sessions` (see Resuming below). `advisor` (default false) launches the child with `--advisor` (omp's advisor runtime); launch-time only — no mid-session toggle, carried through forks |
 | GET | `/sessions/{id}` | session info (below) |
 | DELETE | `/sessions/{id}` | stop the child; transcript stays on disk |
 | POST | `/sessions/{id}/prompt` | `{message, images?, mode?, wait?, timeout?}`. `images` is up to 4 of `{"type":"image","data":"<base64>","mimeType":"image/png"|"image/jpeg"|"image/webp"|"image/gif"}` (max 5 MB decoded each; raw base64 only, no `data:` prefix) and is forwarded to omp on every mode. Bad type, mime, base64, size, or file signature (magic bytes are checked against the claimed mime type) is 422. `message` is required and must be a string even when images carry the whole content (send `""`). `mode`: `prompt` \| `steer` (inject into the running turn) \| `follow_up` (queue for after it). Returns immediately with the ack; follow progress on the WebSocket. `wait:true` blocks until the turn ends and adds `lastAssistantText` (see note) |
@@ -234,6 +234,7 @@ session is a transcript on disk that can be resumed.
 | GET | `/sessions/{id}/file?path=` | download ONE file from the session cwd. `path` is relative; an absolute path or any `..` segment is 422, a real location outside the cwd (including an escaping symlink) is 403, and a directory is 415. Hidden files and hidden folders are refused (403) after the containment check and BEFORE the existence check, so `.git/...`, `.ssh/...`, `.env` and the gateway's own `auth-token` / `gateway.env` / `push-*.json` / `search-index.db` are never served and their existence is not revealed; a missing file is 404; secret names match case-insensitively. Served as an attachment with `Cache-Control: private, no-store`; HTML/SVG/JS and other active types are sent as `application/octet-stream` so the gateway origin can never serve a page. Ranges and ETags come from the framework |
 | POST | `/sessions/{id}/upload?name=&dir=&overwrite=` | put ONE file into the session cwd (`dir` selects a subfolder; default the cwd). The body is the raw bytes, not multipart; `name` is the leaf filename (a leading dot is 422, path components are stripped). At most 32 MiB (`OMPGW_MAX_UPLOAD_BYTES`), enforced while streaming so a chunked body without `Content-Length` cannot buffer past the cap, 413 above it; an existing file is 409 unless `overwrite=true`; a `dir` that escapes the cwd is 422, a hidden `dir` (`.git`, `.ssh`) is 403, a missing one 404; an existing file at the name without `overwrite=true` is 409, and an existing symlink at the name is 403 (the write uses O_NOFOLLOW, so a name cannot be redirected). `-> {name, path, size}` |
 | GET | `/sessions/{id}/subagents` | subagent registry snapshot from omp `get_subagents` (`{"subagents": [...]}`; empty until omp spawns one). The gateway subscribes every live session at `progress` level after v2 negotiation, so `subagent_progress` / `subagent_lifecycle` events flow on the WebSocket |
+| GET | `/sessions/{id}/log` | child stderr tail: `{path, totalBytes, lines}`. Query: `tail` 1..2000 (default 300, read from the last 256 KiB), `errors_only=true` keeps error/traceback lines. No log yet is an empty 200 |
 | GET | `/sessions/{id}/subagents/{sid}/messages?from=` | one subagent's transcript via omp `get_subagent_messages` (`subagentId`, `fromByte`): `{messages, nextByte, reset, sessionFile}`. Page forward with `from=<nextByte>` while `nextByte` is present. Unknown `sid` is an omp command error → 400 |
 | GET | `/sessions/{id}/stats` | token/cost stats |
 | POST | `/sessions/{id}/model` | `{provider, modelId}` (both required; values from `/catalog/models`) |
@@ -317,9 +318,43 @@ remaining rows newest `startedAt` first.
 
 Session info fields: `gwId`, `cwd`, `approvalMode`, `resumedFrom`, `ompSessionId`,
 `ompSessionFile`, `ompSessionName`, `model`, `thinkingLevel`, `advisor` (bool), `isStreaming`,
-`idleSec`, `exited`, `exitCode` (null until exit), `protocolVersion`, `uptimeSec`,
+`lifecycle` (`running` | `restarting` | `failed` | `asleep` | `stopped`), `crashCount`,
+`restartReason`, `idleSec`, `exited`, `exitCode` (null until exit), `protocolVersion`, `uptimeSec`,
 `subscribers` (live WS count), `messageCount`, `contextUsage`,
 `lastEventSeq`, `pendingUi`.
+
+### Crash supervision
+
+The gateway supervises every spawned child. An unexpected exit is a crash:
+the supervisor restarts the same session (same `gwId`, event backlog and
+replay cursor) with jittered backoff (1s doubling to a 30s cap) resuming from
+the last session file, up to `OMPGW_RESTART_BUDGET` consecutive attempts
+(default 3; one that reaches ready refills the budget). Past the budget the
+row stays listed with `lifecycle: "failed"` and `restartReason` until deleted.
+A deliberate stop (user, idle sleep, gateway shutdown) never restarts.
+Lifecycle changes are ordinary session events: `{"type": "lifecycle",
+"lifecycle": "restarting" | "running" | "failed", ...}`, so a connected
+client sees them in the stream (replay included) and can refresh from the
+session row.
+
+### Idle sleep and wake
+
+An idle session does not die: after `OMPGW_IDLE_SLEEP_SEC` (default 1800)
+without activity, with no attached client, no streaming turn, no pending
+dialog and no queued follow-ups, the gateway stops the child and keeps the
+row with `lifecycle: "asleep"`. Anything that needs the child wakes it
+transparently: opening the WebSocket, any command route, a prompt, or
+`POST /sessions` with the same `resumeFrom` (which answers
+`alreadyLive: true` for the woken record). A wake resumes from the last
+session file, so the transcript continues where it left off. Asleep rows do
+not count against the session cap. If a wake fails (omp refuses the resume),
+the row flips to `failed` with the reason.
+
+On shutdown the gateway parks every session that has a transcript (running
+or asleep) to `~/.omp/run/gateway-parked.json`; the next boot re-registers
+them as asleep rows under their original ids, so a gateway restart (upgrade,
+crash) no longer loses sessions. `OMPGW_AUTO_RESUME=0` disables the
+restoration.
 
 ## WebSocket: `/omp-ws/{id}?after=<seq>`
 

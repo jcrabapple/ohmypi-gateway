@@ -47,10 +47,14 @@ def is_test_cwd(cwd: str) -> bool:
 # Atomic), so every session file path the gateway emits or compares is canonical.
 OMP_AGENT_DIR = Path(os.path.expanduser("~/.omp/agent")).resolve()
 
-APPROVAL_MODES = ("yolo", "write", "always-ask")
+APPROVAL_MODES = ("yolo", "write", "always-ask", "always-ask-cached")
 DEFAULT_APPROVAL_MODE = os.environ.get("OMPGW_DEFAULT_APPROVAL", "yolo")
 if DEFAULT_APPROVAL_MODE not in APPROVAL_MODES:
     raise SystemExit(f"OMPGW_DEFAULT_APPROVAL must be one of {APPROVAL_MODES}")
+
+# Consecutive crashes the supervisor absorbs before giving up and surfacing
+# the session as failed. A restart that reaches ready refills the budget.
+RESTART_BUDGET = max(1, int(os.environ.get("OMPGW_RESTART_BUDGET", "3")))
 
 
 
@@ -211,6 +215,21 @@ class OmpSession:
         self.proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
         self._stderr_path = OMP_AGENT_DIR / "gateway-logs" / f"{self.gw_id}.stderr.log"
+
+        # Crash supervision. lifecycle: running | restarting | failed |
+        # asleep | stopped. _stopping marks deliberate shutdowns (user stop,
+        # idle sleep, gateway shutdown) so the supervisor never restarts them;
+        # anything else that kills the child is a crash.
+        self.lifecycle = "running"
+        self._stopping = False
+        self._exit_event = asyncio.Event()
+        self.crash_count = 0          # consecutive crashes without a ready
+        self.total_crashes = 0
+        self.restart_reason: str | None = None
+        self._supervisor: asyncio.Task | None = None
+        # Tests shrink these; production uses the module-level defaults.
+        self.RESTART_BACKOFF_BASE_S = 1.0
+        self.RESTART_BACKOFF_MAX_S = 30.0
 
     @property
     def omp_session_file(self) -> str | None:
@@ -740,6 +759,8 @@ class OmpSession:
         late_errors: also wait (same timeout budget) for a same-id error
         response that may arrive after the initial ack (prompt semantics).
         """
+        if self.lifecycle == "asleep":
+            await self.wake()
         self._next_id += 1
         rid = f"gw-{self._next_id}"
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -748,7 +769,15 @@ class OmpSession:
         if late_errors:
             late_fut = asyncio.get_running_loop().create_future()
             self.pending[f"late:{rid}"] = late_fut
-        await self.send_raw({"id": rid, "type": type_, **params})
+        try:
+            await self.send_raw({"id": rid, "type": type_, **params})
+        except BaseException:
+            # The request never left: deregister so a dead child's _on_exit
+            # does not fail a future nobody will retrieve.
+            self.pending.pop(rid, None)
+            if late_fut is not None:
+                self.pending.pop(f"late:{rid}", None)
+            raise
         try:
             resp = await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
@@ -917,11 +946,19 @@ class OmpSession:
         self._turn_waiters.clear()
         if not self.ready.done():
             self.ready.set_exception(ProcessDead("omp exited before ready"))
+        self._exit_event.set()
         log.info("[%s] omp exited code=%s", self.gw_id, self.exit_code)
 
     async def stop(self, grace: float = 5.0) -> None:
         if self.exited:
             return
+        # Deliberate shutdown: the supervisor must not treat the child's exit
+        # as a crash. Cancel it first so it cannot race the graceful close.
+        self._stopping = True
+        self.lifecycle = "stopped"
+        if self._supervisor is not None:
+            self._supervisor.cancel()
+            self._supervisor = None
         # 1. graceful: close stdin (omp exits 0 on stdin close), then wait a few s.
         with contextlib.suppress(Exception):
             if self.proc and self.proc.stdin and not self.proc.stdin.is_closing():
@@ -949,6 +986,116 @@ class OmpSession:
                 await asyncio.wait_for(asyncio.shield(self._reader_task), 2)
         self._on_exit()
 
+    # --------------------------------------------------------------- respawn
+
+    async def sleep(self) -> None:
+        """Stop the child but keep the session record: identity, backlog and
+        the transcript pointer survive, and the next command or attach wakes
+        it with a resume. Idle sessions sleep instead of dying."""
+        await self.stop()
+        self.pending_ui = {}
+        self._pushed_dialogs = set()
+        self.lifecycle = "asleep"
+
+    async def wake(self) -> None:
+        """Resume a sleeping session in a fresh child. No-op when not asleep."""
+        if self.lifecycle != "asleep":
+            return
+        # Before respawn: respawn() itself issues commands, which would
+        # otherwise recurse into wake().
+        self.lifecycle = "running"
+        self.last_activity = time.time()
+        with contextlib.suppress(Exception):
+            await self._publish({"type": "lifecycle", "lifecycle": "running"})
+        try:
+            await self.respawn()
+        except Exception as e:
+            self.lifecycle = "failed"
+            self.restart_reason = f"wake failed: {e}"
+            with contextlib.suppress(Exception):
+                await self._publish({"type": "lifecycle", "lifecycle": "failed",
+                                     "reason": self.restart_reason})
+            raise
+
+    async def respawn(self) -> None:
+        """Start a fresh child that resumes this session's transcript.
+
+        Same OmpSession object and gw_id: subscribers, backlog and the event
+        seq survive, so an attached client keeps its replay cursor. Resume
+        targets the latest known session file, which may be newer than the
+        file the session was originally started from (forks, compaction).
+        """
+        self.resume_session_file = self._omp_session_file or self.resume_session_file
+        self.exited = False
+        self.exit_code = None
+        self.ready = asyncio.get_running_loop().create_future()
+        self.pending = {}
+        self._chunks = {}
+        self.streaming = False
+        self._turn_in_flight = False
+        self._turn_reset()
+        self.pending_ui = {}
+        self._pushed_dialogs = set()
+        self._negotiation = None
+        self._subagent_sub = None
+        self._exit_event.clear()
+        await self.start()
+        # Re-pull model/context numbers the old child had reported.
+        with contextlib.suppress(Exception):
+            await self.get_state()
+
+    def _backoff_delay(self) -> float:
+        delay = self.RESTART_BACKOFF_BASE_S * (2 ** max(0, self.crash_count - 1))
+        delay = min(delay, self.RESTART_BACKOFF_MAX_S)
+        # Jitter so several sessions crashing together do not retry in lockstep.
+        return delay * (0.5 + (uuid.uuid4().int % 500) / 1000.0)
+
+    async def _supervise(self) -> None:
+        """Restart the child after an unexpected exit, until the budget runs out."""
+        while True:
+            await self._exit_event.wait()
+            if self._stopping:
+                return
+            if self.crash_count >= RESTART_BUDGET:
+                self.lifecycle = "failed"
+                await self._publish({
+                    "type": "lifecycle", "lifecycle": "failed",
+                    "reason": self.restart_reason or f"omp exited (code {self.exit_code})",
+                    "crashes": self.total_crashes,
+                })
+                log.error("[%s] restart budget exhausted, session failed: %s",
+                          self.gw_id, self.restart_reason)
+                return
+            self.crash_count += 1
+            self.total_crashes += 1
+            self.restart_reason = f"omp exited (code {self.exit_code})"
+            self.lifecycle = "restarting"
+            delay = self._backoff_delay()
+            log.warning("[%s] crash #%d/%d, restarting in %.1fs",
+                        self.gw_id, self.crash_count, RESTART_BUDGET, delay)
+            with contextlib.suppress(Exception):
+                await self._publish({"type": "lifecycle", "lifecycle": "restarting",
+                                     "delaySec": round(delay, 2),
+                                     "reason": self.restart_reason})
+            await asyncio.sleep(delay)
+            if self._stopping:
+                return
+            try:
+                await self.respawn()
+            except Exception as e:
+                self.restart_reason = f"restart failed: {e}"
+                log.warning("[%s] respawn failed: %s", self.gw_id, e)
+                # No child exists to crash again, so re-arm the wait here;
+                # the next pass either retries or exhausts the budget.
+                self._exit_event.set()
+                continue
+            # A restart that reached ready refills the budget.
+            self.crash_count = 0
+            self.restart_reason = None
+            self.lifecycle = "running"
+            with contextlib.suppress(Exception):
+                await self._publish({"type": "lifecycle", "lifecycle": "running"})
+
     # ------------------------------------------------------------------ meta
 
     def info(self) -> dict:
@@ -965,6 +1112,9 @@ class OmpSession:
             "thinkingLevel": self.thinking_level or self.requested_thinking,
             "advisor": self.advisor,
             "isStreaming": self.streaming,
+            "lifecycle": self.lifecycle,
+            "crashCount": self.crash_count,
+            "restartReason": self.restart_reason,
             "idleSec": round(time.time() - self.last_activity, 1),
             "exited": self.exited,
             "exitCode": self.exit_code,
@@ -996,6 +1146,8 @@ class SessionManager:
                           advisor=advisor)
         await sess.start()
         self.sessions[sess.gw_id] = sess
+        sess._supervisor = asyncio.create_task(sess._supervise(),
+                                               name=f"omp-supervise-{sess.gw_id}")
         with contextlib.suppress(Exception):
             await sess.get_state()
         return sess
@@ -1003,7 +1155,9 @@ class SessionManager:
     def find_by_file(self, session_file: str) -> OmpSession | None:
         want = canonical_path(session_file)
         for s in self.sessions.values():
-            if not s.exited and s.omp_session_file == want:
+            # Asleep records still own their transcript: a resume of the same
+            # file must wake the record, never spawn a duplicate child.
+            if (not s.exited or s.lifecycle == "asleep") and s.omp_session_file == want:
                 return s
         return None
 
@@ -1019,15 +1173,36 @@ class SessionManager:
         self.sessions.pop(gw_id, None)
         return {"stopped": gw_id}
 
+    async def sleep(self, gw_id: str) -> dict:
+        """Idle the session: child stopped, record kept for wake-on-use."""
+        sess = self.get(gw_id)
+        await sess.sleep()
+        return {"slept": gw_id}
+
     async def reap_dead(self) -> None:
         for gid, s in list(self.sessions.items()):
-            if s.exited:
+            if not s.exited:
+                continue
+            # "running"+exited is the transient window before the supervisor
+            # flips a crash to restarting/failed; "stopped" is a deliberate
+            # stop. Everything else (restarting, failed, asleep) stays listed.
+            if s.lifecycle in ("running", "stopped"):
                 self.sessions.pop(gid, None)
 
     def list_live(self) -> list[dict]:
         return [s.info() for s in self.sessions.values()]
 
+    def count_children(self) -> int:
+        """Sessions occupying a child-process slot: a live child, or a crash
+        the supervisor is about to respawn. Asleep and failed rows are
+        records only and never block a new session."""
+        return sum(1 for s in self.sessions.values()
+                   if not s.exited or s.lifecycle == "restarting")
+
     async def shutdown_all(self) -> None:
+        # Record who was alive before killing children, so the next boot can
+        # bring the rows back as asleep and resume on demand.
+        write_parked(self.sessions)
         for gid in list(self.sessions):
             with contextlib.suppress(Exception):
                 await self.sessions[gid].stop()
@@ -1162,3 +1337,67 @@ _manager = SessionManager()
 
 def get_manager() -> SessionManager:
     return _manager
+
+
+# --------------------------------------------------------------------------
+# Parked sessions: the registry that lets sessions survive a gateway restart.
+# On shutdown every session with a transcript is recorded; on boot the rows
+# come back as asleep records that wake (with --resume) on first use.
+
+PARKED_PATH = OMP_AGENT_DIR.parent / "run" / "gateway-parked.json"
+
+
+def write_parked(sessions: dict[str, OmpSession]) -> None:
+    rows = [
+        {"gwId": s.gw_id, "sessionFile": s.omp_session_file, "cwd": s.cwd,
+         "savedAt": time.time()}
+        for s in sessions.values()
+        if s.omp_session_file and s.lifecycle not in ("stopped", "failed")
+    ]
+    try:
+        PARKED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if not rows:
+            PARKED_PATH.unlink(missing_ok=True)
+            return
+        tmp = PARKED_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"version": 1, "parked": rows}))
+        os.replace(tmp, PARKED_PATH)
+    except OSError:
+        log.warning("could not write parked-session registry %s", PARKED_PATH)
+
+
+def restore_parked() -> int:
+    """Re-register parked sessions as asleep rows. Returns the count.
+
+    The omp child from before the restart is gone; the transcript on disk is
+    the truth, so the row is asleep and the first command or attach respawns
+    it with --resume (idle-sleep wake path). Broken rows (deleted transcript,
+    missing cwd, a session already live again) are skipped.
+    """
+    try:
+        data = json.loads(PARKED_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return 0
+    m = get_manager()
+    restored = 0
+    for row in data.get("parked") or []:
+        f = row.get("sessionFile")
+        cwd = row.get("cwd")
+        if not f or not cwd:
+            continue
+        if not Path(f).is_file() or not Path(cwd).is_dir():
+            continue
+        if m.find_by_file(f) is not None:
+            continue
+        s = OmpSession(cwd=cwd, session_file=f)
+        if row.get("gwId"):
+            # Keep the original id: deep links and clients survive the restart.
+            s.gw_id = str(row["gwId"])
+            s._stderr_path = OMP_AGENT_DIR / "gateway-logs" / f"{s.gw_id}.stderr.log"
+        s.exited = True
+        s.lifecycle = "asleep"
+        m.sessions[s.gw_id] = s
+        restored += 1
+    if restored:
+        log.info("restored %d parked session(s) as asleep rows", restored)
+    return restored

@@ -24,7 +24,8 @@ import yaml
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .auth import (
@@ -50,6 +51,7 @@ from .bridge import (
     canonical_path,
     get_manager,
     read_session_cwd,
+    restore_parked,
     scan_saved_sessions,
 )
 from .fsbrowse import FsBrowseError, list_subdirs
@@ -66,13 +68,15 @@ STARTED_AT = time.time()
 log = logging.getLogger("ohmpi-gateway.main")
 
 MAX_SESSIONS = int(os.environ.get("OMPGW_MAX_SESSIONS", "8"))
-IDLE_REAP_SEC = int(os.environ.get("OMPGW_IDLE_REAP_SEC", str(6 * 3600)))
+# Idle sessions sleep (child stopped, record kept) instead of being killed:
+# the next command or attach wakes them with a resume.
+IDLE_SLEEP_SEC = int(os.environ.get("OMPGW_IDLE_SLEEP_SEC", str(30 * 60)))
 WS_HEARTBEAT_SEC = 25          # Cloudflare drops idle websockets at ~100s
 WS_AUTH_TIMEOUT_SEC = 10
 # Extra browser origins allowed to use cookie auth (comma-separated).
 EXTRA_ORIGINS = {o.strip() for o in os.environ.get("OMPGW_EXTRA_ORIGINS", "").split(",") if o.strip()}
 THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "auto")
-APPROVAL_MODES = ("always-ask", "write", "yolo")
+APPROVAL_MODES = ("always-ask", "always-ask-cached", "write", "yolo")
 
 tokens = TokenStore(PROJECT_DIR / "auth-token")
 limiter = FailureLimiter()
@@ -100,6 +104,11 @@ async def _lifespan(app):
     # keep the gateway from booting.
     with contextlib.suppress(Exception):
         get_ledger()
+    # Sessions parked by the previous run come back as asleep rows; the first
+    # command or attach resumes them. Off with OMPGW_AUTO_RESUME=0.
+    if os.environ.get("OMPGW_AUTO_RESUME", "1") != "0":
+        with contextlib.suppress(Exception):
+            restore_parked()
     app.state.reaper = asyncio.create_task(_reaper())
     d = collab.get_discovery()
     d.on_ask = _push_ask if push.available() else None
@@ -130,6 +139,9 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-API-Key"],
     max_age=600,
 )
+# JSON answers (sessions list, transcript pages, search) shrink 4-8x over the
+# tunnel. WebSocket upgrades are untouched by GZipMiddleware.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 PUBLIC_PATHS = {"/", "/classic", "/healthz", "/auth/login", "/auth/logout",
                 "/.well-known/ompgw.json", "/manifest.webmanifest"}
@@ -376,7 +388,7 @@ async def discovery():
 async def health():
     m = get_manager()
     return {"ok": True, "version": VERSION, "uptimeSec": round(time.time() - STARTED_AT, 1),
-            "liveSessions": len(m.sessions), "maxSessions": MAX_SESSIONS}
+            "liveSessions": m.count_children(), "maxSessions": MAX_SESSIONS}
 
 
 @app.get("/api/system")
@@ -388,10 +400,10 @@ async def system():
         omp_version = m_.group(1) if m_ else "unknown"
     return {
         "gateway": {"version": VERSION, "uptimeSec": round(time.time() - STARTED_AT, 1),
-                    "maxSessions": MAX_SESSIONS, "idleReapSec": IDLE_REAP_SEC},
+                    "maxSessions": MAX_SESSIONS, "idleSleepSec": IDLE_SLEEP_SEC},
         "omp": {"version": omp_version, "agentDir": str(OMP_AGENT_DIR),
                 "configFile": str(CONFIG_FILE)},
-        "liveSessions": len(m.sessions),
+        "liveSessions": m.count_children(),
     }
 
 
@@ -1061,9 +1073,12 @@ async def create_session(request: Request):
         resume = str(rp)
         existing = get_manager().find_by_file(resume)
         if existing is not None:
+            if existing.lifecycle == "asleep":
+                with contextlib.suppress(Exception):
+                    await existing.wake()
             return {**existing.info(), "alreadyLive": True}
     async with _spawn_lock:
-        if len(get_manager().sessions) >= MAX_SESSIONS:
+        if get_manager().count_children() >= MAX_SESSIONS:
             raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
         cwd = body.get("cwd")
         cwd_fallback = False
@@ -1356,7 +1371,7 @@ async def fork(gw_id: str, request: Request):
         # one has flushed the file (the reverse order reads an empty transcript).
         # Held through the respawn with _spawn_lock so the cap stays exact.
         async with _spawn_lock:
-            if len(m.sessions) - (1 if gw_id in m.sessions else 0) >= MAX_SESSIONS:
+            if m.count_children() - (1 if gw_id in m.sessions and not m.sessions[gw_id].exited else 0) >= MAX_SESSIONS:
                 raise HTTPException(429, f"session limit reached ({MAX_SESSIONS}); stop one first")
             with contextlib.suppress(KeyError):
                 await get_manager().stop(gw_id)
@@ -1509,6 +1524,36 @@ async def session_upload(gw_id: str, request: Request, name: str = "", dir: str 
 async def subagents(gw_id: str):
     """Registry snapshot for the subagent panel. Empty until omp spawns one."""
     return await get_session_or_404(gw_id).command("get_subagents", timeout=30)
+
+
+_LOG_ERR_RE = re.compile(r"error|traceback|exception|critical|failed|panic", re.IGNORECASE)
+
+
+@app.get("/api/sessions/{gw_id}/log")
+async def session_log(gw_id: str, errors_only: bool = False, tail: int = 300):
+    """Tail the session child's stderr log (gateway-logs/<gwId>.stderr.log).
+
+    `tail` 1..2000 lines (default 300, from the last 256 KiB); `errors_only`
+    keeps lines mentioning an error/traceback/exception. No log yet is an
+    empty 200, not a 404 — a freshly started child may not have written one.
+    """
+    sess = get_session_or_404(gw_id)
+    path = OMP_AGENT_DIR / "gateway-logs" / f"{sess.gw_id}.stderr.log"
+    size = 0
+    lines: list[str] = []
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 256 * 1024))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return {"path": str(path), "totalBytes": 0, "lines": []}
+    tail = max(1, min(tail, 2000))
+    shown = lines[-tail:]
+    if errors_only:
+        shown = [ln for ln in shown if _LOG_ERR_RE.search(ln)]
+    return {"path": str(path), "totalBytes": size, "lines": shown}
 
 
 @app.get("/api/sessions/{gw_id}/subagents/{sub_id}/messages")
@@ -1671,6 +1716,11 @@ async def ws_session(ws: WebSocket, gw_id: str, after: int = 0):
         await ws.close(code=4404)
         return
 
+    # Opening a sleeping session wakes it: the child resumes from the last
+    # transcript while the backlog replays. Failure marks the row failed.
+    with contextlib.suppress(Exception):
+        await sess.wake()
+
     q = sess.subscribe()
     last_sent = max(0, after)
     sender_lock = asyncio.Lock()
@@ -1764,16 +1814,20 @@ async def ws_session(ws: WebSocket, gw_id: str, after: int = 0):
 
 async def _reaper() -> None:
     while True:
-        await asyncio.sleep(300)
+        await asyncio.sleep(60)
         m = get_manager()
         await m.reap_dead()
         now = time.time()
         for gid, s in list(m.sessions.items()):
-            if s.subscribers or s.is_busy():
+            if s.lifecycle != "running" or s.subscribers or s.is_busy():
                 continue
-            if now - s.last_activity > IDLE_REAP_SEC:
+            # A pending dialog or a queued follow-up means the session is not
+            # done: sleeping would strand an answer or a promised turn.
+            if s.pending_ui or s.queue:
+                continue
+            if now - s.last_activity > IDLE_SLEEP_SEC:
                 with contextlib.suppress(Exception):
-                    await m.stop(gid)
+                    await m.sleep(gid)
 
 
 # ------------------------------------------------------------------- static
@@ -1784,16 +1838,37 @@ NO_STORE = {"Cache-Control": "no-store", "CDN-Cache-Control": "no-store", "Cloud
 IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
 
 
+def _etag_of(p: Path) -> str | None:
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    return f'W/"{int(st.st_mtime_ns):x}-{st.st_size:x}"'
+
+
+def _html_response(request: Request, p: Path) -> Response:
+    """index/classic: no-cache but revalidatable — a 304 costs a header round
+    trip instead of a full HTML download on every cold visit."""
+    et = _etag_of(p)
+    inm = request.headers.get("if-none-match")
+    if et and inm and et in inm:
+        return Response(status_code=304, headers={"ETag": et})
+    headers = dict(NO_CACHE)
+    if et:
+        headers["ETag"] = et
+    return FileResponse(p, headers=headers)
+
+
 @app.get("/")
-async def index():
+async def index(request: Request):
     if web_dist_ready():
-        return FileResponse(WEB_DIST / "index.html", headers=NO_CACHE)
-    return FileResponse(STATIC_DIR / "index.html")
+        return _html_response(request, WEB_DIST / "index.html")
+    return _html_response(request, STATIC_DIR / "index.html")
 
 
 @app.get("/classic")
-async def classic():
-    return FileResponse(STATIC_DIR / "index.html")
+async def classic(request: Request):
+    return _html_response(request, STATIC_DIR / "index.html")
 
 
 @app.get("/assets/{rel:path}")

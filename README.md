@@ -20,7 +20,7 @@ a rail, and a terminal session you started by hand appears next to the ones the 
 
 | | |
 |---|---|
-| Sessions | Create, resume from a saved transcript, fork, rename, stop. One `omp` child per live session, protocol v2 with chunk reassembly and a numbered event backlog so a reconnect never loses a gap. |
+| Sessions | Create, resume from a saved transcript, fork, rename, stop. One `omp` child per live session, protocol v2 with chunk reassembly and a numbered event backlog so a reconnect never loses a gap. Crashed children restart automatically with backoff (resume from the last transcript) and surface as `restarting`/`failed` rows; sessions survive idle periods by sleeping and wake on open. |
 | Streaming | Per-session WebSocket with replay-after-cursor, heartbeats, and a plain HTTP events endpoint for clients that can't hold a socket. |
 | Approvals | Blocking `omp` dialogs surface as pending UI: the client answers them, and a push notification goes out when nobody is watching that session. |
 | Queue | Gateway-owned FIFO of follow-ups per session, editable and cancellable until they fire. |
@@ -62,9 +62,11 @@ Tunables go in `gateway.env` (gitignored, loaded by the unit):
 | Variable | Meaning |
 |---|---|
 | `OMPGW_MAX_SESSIONS` | Live session cap (default 8) |
-| `OMPGW_IDLE_REAP_SEC` | Idle session reaper |
+| `OMPGW_RESTART_BUDGET` | Consecutive crash restarts before a session is marked failed (default 3) |
+| `OMPGW_IDLE_SLEEP_SEC` | Idle seconds before a session sleeps (child stopped, resumed on next use; default 1800) |
+| `OMPGW_AUTO_RESUME` | `0` disables restoring parked sessions as asleep rows on boot (default on) |
 | `OMPGW_EXTRA_ORIGINS` | Extra allowed `Origin`s beyond same-origin |
-| `OMPGW_DEFAULT_APPROVAL` | `always-ask` / `write` / `yolo` for new sessions |
+| `OMPGW_DEFAULT_APPROVAL` | `always-ask` / `always-ask-cached` / `write` / `yolo` for new sessions |
 | `OMPGW_WEB_DIST` | Where the built web client lives (default `web/dist`) |
 | `OMPGW_VAPID_SUB` | Contact URI for Web Push (default is an unroutable placeholder) |
 | `OMPGW_COLLAB_DIR` | omp collab discovery directory (default `~/.omp/run/collab-hosts`) |

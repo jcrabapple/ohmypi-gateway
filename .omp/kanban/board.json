@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "next_id": 8,
+  "columns": [
+    {
+      "id": "todo",
+      "title": "To do"
+    },
+    {
+      "id": "doing",
+      "title": "Doing"
+    },
+    {
+      "id": "review",
+      "title": "Review"
+    },
+    {
+      "id": "done",
+      "title": "Done"
+    }
+  ],
+  "tickets": [
+    {
+      "id": "K-1",
+      "title": "Supervise omp children: restart crashed sessions with backoff",
+      "body": "Distinct user-stop vs crash (_stopping flag). On crash: jittered backoff 1s-30s, respawn via -r omp_session_file on the SAME OmpSession (keep gw_id + backlog seq), restart budget 3 consecutive (refilled on successful ready) then lifecycle=failed + reason. info()/api rows gain lifecycle/crashCount/restartReason; inject synthetic lifecycle events into the event stream so WS clients update. Env: OMPGW_RESTART_BUDGET, backoff base injectable for tests (QUEUE_RETRY_BASE_S pattern). Tests: crash->restart with resume file, budget exhaustion -> failed, user stop never restarts. Verify: .venv/bin/python -m pytest tests/test_supervisor.py -q",
+      "column": "done",
+      "priority": 10,
+      "tags": [
+        "backend"
+      ],
+      "blocked_by": [],
+      "created": "2026-11-18T00:04:31.985Z",
+      "updated": "2026-11-18T00:21:32.226Z",
+      "notes": [
+        {
+          "at": "2026-11-18T00:15:56.840Z",
+          "text": "Done: supervisor in bridge.py (_supervise/respawn, jittered backoff, RESTART_BUDGET env), count_children cap fix, lifecycle events, web glyph/grouping/types, docs. Tests: tests/test_supervisor.py 6/6, queue regression 8/8, svelte-check 0 errors, vitest 803 pass, build ok."
+        }
+      ]
+    },
+    {
+      "id": "K-2",
+      "title": "Idle sleep/wake instead of idle kill",
+      "body": "Reaper stops the child after OMPGW_IDLE_SLEEP_SEC (default 1800) but keeps the OmpSession as lifecycle=asleep with identity (cwd/model/approval/advisor/omp_session_file). Skip sleep when busy, subscribed, pendingUi, or queue nonempty. Wake on WS attach / prompt / queue ops / any command route via _ensure_awake(). reap_dead must not drop asleep sessions; asleep rows don't count toward MAX_SESSIONS. Replace IDLE_REAP_SEC everywhere incl README/env table + API.md. Tests: sleep->wake-on-attach restores resume file, prompt wakes, busy session not slept. Verify: pytest tests/test_sleep.py -q",
+      "column": "done",
+      "priority": 20,
+      "tags": [
+        "backend"
+      ],
+      "blocked_by": [],
+      "created": "2026-11-18T00:04:31.995Z",
+      "updated": "2026-11-18T00:21:32.247Z",
+      "notes": [
+        {
+          "at": "2026-11-18T00:21:32.237Z",
+          "text": "Verified live: e2e all green after service restart."
+        }
+      ]
+    },
+    {
+      "id": "K-3",
+      "title": "Sessions survive gateway restart (parked registry)",
+      "body": "On shutdown_all, record live/asleep sessions with an omp_session_file to ~/.omp/run/gateway-parked.json (atomic). On boot, re-register them as lifecycle=asleep rows so the rail offers one-tap wake (K-2 wake machinery). OMPGW_AUTO_RESUME=0 disables re-registration. Tests: restart gateway with parked file -> rows appear asleep. Verify: pytest tests/test_parked.py -q",
+      "column": "done",
+      "priority": 30,
+      "tags": [
+        "backend"
+      ],
+      "blocked_by": [
+        "K-2"
+      ],
+      "created": "2026-11-18T00:04:32.005Z",
+      "updated": "2026-11-18T00:27:57.333Z",
+      "notes": [
+        {
+          "at": "2026-11-18T00:27:57.323Z",
+          "text": "already done"
+        }
+      ]
+    },
+    {
+      "id": "K-4",
+      "title": "Background jobs surface: jobs API + web jobs section",
+      "body": "Confirm RPC names (getJobTree/getJobDetail/cancelJob) against rpc.md for our omp build. Thin REST routes /api/sessions/{id}/jobs[/{jid}] + POST cancel. Web: Jobs section in the session context panel (tree, per-job detail with output tail, cancel with confirm). Check tool_execution_update async detail for background badge on tool cards. Verify: pytest + bun run build in web/",
+      "column": "todo",
+      "priority": 49,
+      "tags": [
+        "backend",
+        "ui"
+      ],
+      "blocked_by": [],
+      "created": "2026-11-18T00:04:32.015Z",
+      "updated": "2026-11-18T00:29:06.838Z",
+      "notes": [
+        {
+          "at": "2026-11-18T00:27:46.475Z",
+          "text": "Verified live: prompted session parked on restart, restored as asleep under same gwId, woken via normal route use, deleted."
+        },
+        {
+          "at": "2026-11-18T00:29:06.838Z",
+          "text": "BLOCKED on omp: rpc.md has no job surface (no getJobTree/getJobDetail/cancelJob/async frames). Those are in-process SDK methods; omp-web runs the SDK inside the session process, our gateway uses --mode rpc children. Revisit when omp exposes job frames over RPC, or if sessions switch to SDK integration."
+        }
+      ]
+    },
+    {
+      "id": "K-5",
+      "title": "Approval takeover in composer",
+      "body": "Extend ApprovalPanel: when pendingUi select/confirm for a tool approval exists, the composer area renders the approval (full prompt, Approve, Deny, Esc=Deny, keyboard reachable) instead of the text box. Check omp build for always-ask-cached grants before adding 'approve for session'. Verify: bun run build + manual against a write-mode session",
+      "column": "done",
+      "priority": 50,
+      "tags": [
+        "ui"
+      ],
+      "blocked_by": [],
+      "created": "2026-11-18T00:04:32.025Z",
+      "updated": "2026-11-18T00:40:24.746Z",
+      "notes": [
+        {
+          "at": "2026-11-18T00:40:24.737Z",
+          "text": "Done: Esc=Deny on approval dialogs (armed-guarded), always-ask-cached added to both APPROVAL_MODES lists + docs. svelte-check 0 errors, vitest 803 pass, build ok. UI not click-tested - keydown path code-reviewed only."
+        }
+      ]
+    },
+    {
+      "id": "K-6",
+      "title": "Small borrows: session log viewer, gzip/etag, ^model mentions",
+      "body": "1) GET /api/sessions/{id}/log tailing gateway-logs/<gw_id>.stderr.log with errors-only filter + link from SessionInfoSheet. 2) GZipMiddleware for JSON>1KiB (mind WS + Cloudflare), ETag/304 for index/static (assets already immutable+hashed). 3) ^model mention completion in composer listing session models. Verify: pytest + bun run build",
+      "column": "review",
+      "priority": 60,
+      "tags": [
+        "backend",
+        "ui"
+      ],
+      "blocked_by": [],
+      "created": "2026-11-18T00:04:32.035Z",
+      "updated": "2026-11-18T00:40:24.766Z",
+      "notes": [
+        {
+          "at": "2026-11-18T00:40:24.756Z",
+          "text": "Done: /api/sessions/{id}/log (tail+errors_only, empty-200), GZipMiddleware JSON>1KiB (verified content-encoding: gzip live), ETag/304 on / and /classic (verified 304 live), SessionInfoSheet Diagnostics section. Deferred: ^model mention completion - real composer work, needs its own ticket. UI section not click-tested."
+        }
+      ]
+    },
+    {
+      "id": "K-7",
+      "title": "Composer: ^model mention completion",
+      "body": "Split from K-6: ^ triggers a model picker in the composer using GET /api/sessions/{id}/models, following the atQuery.ts trigger/insert pattern (new trigger char, own menu state alongside slash + @file). Effort levels shown per model when available.",
+      "column": "todo",
+      "priority": 70,
+      "tags": [
+        "ui"
+      ],
+      "blocked_by": [],
+      "created": "2026-11-18T00:40:24.776Z",
+      "updated": "2026-11-18T00:40:24.776Z",
+      "notes": []
+    }
+  ]
+}
