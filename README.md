@@ -20,15 +20,17 @@ a rail, and a terminal session you started by hand appears next to the ones the 
 
 | | |
 |---|---|
-| Sessions | Create, resume from a saved transcript, fork, rename, stop. One `omp` child per live session, protocol v2 with chunk reassembly and a numbered event backlog so a reconnect never loses a gap. Crashed children restart automatically with backoff (resume from the last transcript) and surface as `restarting`/`failed` rows; sessions survive idle periods by sleeping and wake on open. |
+| Sessions | Create, resume from a saved transcript, fork, rename, stop. One `omp` child per live session, protocol v2 with chunk reassembly and a numbered event backlog so a reconnect never loses a gap. Crashed children restart automatically with backoff (resume from the last transcript) and surface as `restarting`/`failed` rows; sessions survive idle periods by sleeping and wake on open; they also survive gateway restarts — shutdown parks them and the next boot brings the rows back, one tap to resume. |
 | Streaming | Per-session WebSocket with replay-after-cursor, heartbeats, and a plain HTTP events endpoint for clients that can't hold a socket. |
-| Approvals | Blocking `omp` dialogs surface as pending UI: the client answers them, and a push notification goes out when nobody is watching that session. |
+| Approvals | Blocking `omp` dialogs surface as pending UI: the composer is replaced by the dialog (full prompt, numbered options, Esc denies), and a push notification goes out when nobody is watching that session. `always-ask-cached` sessions remember grants per tool. |
+| Diagnostics | Every child's stderr is captured to a rotated log; the session info sheet tails it with an errors-only filter (`GET /api/sessions/{id}/log`). |
 | Queue | Gateway-owned FIFO of follow-ups per session, editable and cancellable until they fire. |
 | Plan and diffs | `todoPhases` rendered as a live plan, word-level diff view for every edit `omp` makes. |
 | Subagents | Progress frames and per-subagent transcripts. |
 | Usage | A turn-level ledger (tokens, cost, per model) plus search across live and archived transcripts. |
 | External sessions | Read-only rows for interactive `omp` sessions the gateway did not spawn, discovered from omp's collab registry. |
 | Push | Web Push when a dialog, a turn end (completion or error, per-kind policy) or an external session needs you while nobody is watching. |
+| Kanban | Read and edit per-project kanban boards (`<cwd>/.omp/kanban/board.json`): tickets with priority, tags, blockers and notes, claim/release, archive. The board is a plain file next to the project, edited atomically and safe to share with the CLI. |
 
 ## Requirements
 
@@ -93,7 +95,9 @@ end-to-end encrypted relay, so it is a deliberate choice, not a local-only setti
 ## Layout
 
 - `gateway/bridge.py`: async JSONL client for `omp --mode rpc`. One child per live session,
-  request correlation, protocol v2 negotiation, event backlog, pending-dialog tracking.
+  request correlation, protocol v2 negotiation, event backlog, pending-dialog tracking,
+  crash supervision and sleep/wake.
+- `gateway/kanban.py`: per-project kanban boards (`/api/kanban/*`), file-backed and atomic.
 - `gateway/auth.py`: bearer token, signed session cookie, per-IP lockout.
 - `gateway/collab.py`: read-only collab registry reader (`/api/collab`).
 - `gateway/push.py`: VAPID keys, device subscriptions, dialog and attention pushes.
