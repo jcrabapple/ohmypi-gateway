@@ -8,7 +8,7 @@ import { cleanup, render, settle } from './mount';
 function info(gwId: string): SessionInfo {
   return {
     gwId, cwd: `/work/${gwId}`, approvalMode: 'yolo', resumedFrom: null, ompSessionId: null, ompSessionFile: null,
-    ompSessionName: null, model: null, advisor: false, thinkingLevel: null, isStreaming: false, idleSec: 0, exited: false,
+    ompSessionName: null, model: null, advisor: false, thinkingLevel: null, isStreaming: false, lifecycle: 'running' as const, crashCount: 0, restartReason: null, idleSec: 0, exited: false,
     exitCode: null, protocolVersion: null, uptimeSec: 0, subscribers: 0, messageCount: 0,
     contextUsage: null, lastEventSeq: 0, pendingUi: [],
   };
@@ -93,5 +93,19 @@ describe('SessionHeader review actions', () => {
     active.transcript = { ...emptyTranscript(), running: true };
     await settle();
     expect(fork()!.disabled).toBe(true);
+  });
+
+  it('offers Kanban board in the session menu and opens it for the session cwd', async () => {
+    active.gwId = 'gw-k';
+    active.info = info('gw-k');
+    const { target } = render(SessionHeader, {});
+    target.querySelector<HTMLButtonElement>('button[aria-label="Session menu"]')!.click();
+    await settle();
+    const kb = [...target.querySelectorAll('button')].find((b) => b.textContent?.includes('Kanban board'));
+    expect(kb).toBeDefined();
+    kb!.click();
+    await Promise.resolve();
+    expect(location.hash).toBe('#/kanban?cwd=%2Fwork%2Fgw-k');
+    location.hash = '';
   });
 });

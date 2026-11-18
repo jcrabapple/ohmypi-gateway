@@ -91,6 +91,12 @@ export interface SessionInfo {
   thinkingLevel: ThinkingLevel | string | null;
   advisor: boolean;
   isStreaming: boolean;
+  /** Crash supervision state: running, restarting, failed, asleep, stopped. */
+  lifecycle: 'running' | 'restarting' | 'failed' | 'asleep' | 'stopped';
+  /** Consecutive crashes without a successful restart (refilled on ready). */
+  crashCount: number;
+  /** Why the last crash or failed restart happened. */
+  restartReason: string | null;
   idleSec: number;
   exited: boolean;
   exitCode: number | null;
@@ -231,6 +237,13 @@ export interface SessionState {
   tokensPerSecond: number | null;
   messageCount: number;
   contextUsage: ContextUsage | null;
+}
+
+/** GET /api/sessions/{id}/log: the child's stderr tail. */
+export interface SessionLog {
+  path: string;
+  totalBytes: number;
+  lines: string[];
 }
 
 export interface SessionStatsData {

@@ -103,6 +103,14 @@
     return [basename(s.cwd), model].filter(Boolean).join(' · ');
   }
 
+  /** Lifecycle beats the group's default: crashed/restarting rows carry
+   *  their own glyph even inside the Running group. */
+  function rowStatus(s: SessionInfo, group: SessionStatus): SessionStatus {
+    if (s.lifecycle === 'restarting') return 'restarting';
+    if (s.lifecycle === 'failed') return 'failed';
+    return group;
+  }
+
   function connection(): 'live' | 'connecting' | 'offline' {
     if (sessionsStore.error) return 'offline';
     if (active.gwId && active.connection.state !== 'live') return 'connecting';
@@ -183,7 +191,7 @@
               <RailRow
                 title={sessionTitle(s, sessionsStore.saved)}
                 sub={liveSub(s)}
-                status={g.status}
+                status={rowStatus(s, g.status)}
                 active={nav.gwId === s.gwId}
                 badge={s.pendingUi.length}
                 forked={s.gwId in sessionsStore.forked}

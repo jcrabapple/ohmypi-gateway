@@ -1,5 +1,5 @@
 <script module lang="ts">
-  export type SessionStatus = 'needs' | 'review' | 'running' | 'idle';
+  export type SessionStatus = 'needs' | 'review' | 'running' | 'idle' | 'restarting' | 'failed';
 </script>
 
 <script lang="ts">
@@ -10,6 +10,8 @@
     review: 'Ready for review',
     running: 'Running',
     idle: 'Idle',
+    restarting: 'Restarting after a crash',
+    failed: 'Crashed',
   };
 
   let { status }: { status: SessionStatus } = $props();
@@ -39,6 +41,13 @@
   .needs {
     background: var(--warn);
     box-shadow: 0 0 0 3px var(--warn-soft);
+  }
+  .restarting {
+    background: var(--warn);
+    animation: pulse 1.6s var(--ease) infinite;
+  }
+  .failed {
+    background: var(--err);
   }
   .review {
     width: auto;

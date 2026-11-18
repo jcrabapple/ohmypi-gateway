@@ -40,9 +40,16 @@
   }
 
   function onwindowkey(e: KeyboardEvent) {
-    if (request.method !== 'select' || !armed || busy) return;
+    if (!armed || busy) return;
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    // Esc denies: the fastest way to refuse a dialog that took over the composer.
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      void answer({ cancelled: true });
+      return;
+    }
+    if (request.method !== 'select') return;
     if (!/^[1-9]$/.test(e.key)) return;
     const opt = options[Number(e.key) - 1];
     if (opt === undefined) return;

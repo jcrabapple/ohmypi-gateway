@@ -75,10 +75,17 @@ export function groupSessions(
   const idle: SessionInfo[] = [];
   const liveFiles = new Set<string>();
   for (const s of live) {
-    if (s.exited) continue;
+    // Exited rows vanish, unless the gateway still owns the record:
+    // failed stays until deleted, restarting is mid-recovery, asleep is
+    // one tap from waking.
+    if (s.exited && s.lifecycle !== 'failed' && s.lifecycle !== 'restarting' && s.lifecycle !== 'asleep') continue;
     if (s.ompSessionFile) liveFiles.add(s.ompSessionFile);
     if (s.pendingUi.length > 0) needsYou.push(s);
     else if (s.isStreaming || todoActive.has(s.gwId)) running.push(s);
+    // A crash the supervisor is restarting, or one it gave up on, is an
+    // active problem: keep it in the Running group where the glyph
+    // (amber pulse / red) tells the two apart.
+    else if (s.lifecycle === 'restarting' || s.lifecycle === 'failed') running.push(s);
     else if (needsReview.has(s.gwId)) review.push(s);
     else idle.push(s);
   }

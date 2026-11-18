@@ -60,7 +60,7 @@ describe('groupSessions external rows', () => {
     const live: SessionInfo[] = [{
       gwId: 'l', cwd: '/x', approvalMode: 'yolo', resumedFrom: null, ompSessionId: null,
       ompSessionFile: null, ompSessionName: null, model: null, advisor: false,
-      thinkingLevel: null, isStreaming: false, idleSec: 0, exited: false, exitCode: null,
+      thinkingLevel: null, isStreaming: false, lifecycle: 'running' as const, crashCount: 0, restartReason: null, idleSec: 0, exited: false, exitCode: null,
       protocolVersion: null, uptimeSec: 0, subscribers: 0, messageCount: 0,
       contextUsage: null, lastEventSeq: 0, pendingUi: [],
     }];

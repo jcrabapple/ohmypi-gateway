@@ -27,12 +27,14 @@ describe('groupSessions', () => {
         live('c'),
         live('d', { isStreaming: true, pendingUi: [{ id: '2', method: 'select' }] }),
         live('gone', { exited: true }),
+        live('flaky', { exited: true, lifecycle: 'restarting' }),
+        live('dead', { exited: true, lifecycle: 'failed' }),
       ],
       [],
       NOW,
     );
     expect(g.needsYou.map((s) => s.gwId)).toEqual(['b', 'd']);
-    expect(g.running.map((s) => s.gwId)).toEqual(['a']);
+    expect(g.running.map((s) => s.gwId)).toEqual(['a', 'flaky', 'dead']);
     expect(g.idle.map((s) => s.gwId)).toEqual(['c']);
   });
 

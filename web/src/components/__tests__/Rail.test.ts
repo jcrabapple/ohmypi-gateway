@@ -8,7 +8,7 @@ import { cleanup, render, settle } from './mount';
 function live(gwId: string, over: Partial<SessionInfo> = {}): SessionInfo {
   return {
     gwId, cwd: `/work/${gwId}`, approvalMode: 'yolo', resumedFrom: null, ompSessionId: null, ompSessionFile: null,
-    ompSessionName: null, model: null, advisor: false, thinkingLevel: null, isStreaming: false, idleSec: 0, exited: false,
+    ompSessionName: null, model: null, advisor: false, thinkingLevel: null, isStreaming: false, lifecycle: 'running' as const, crashCount: 0, restartReason: null, idleSec: 0, exited: false,
     exitCode: null, protocolVersion: null, uptimeSec: 0, subscribers: 0, messageCount: 0,
     contextUsage: null, lastEventSeq: 0, pendingUi: [], ...over,
   };
@@ -89,6 +89,16 @@ describe('Rail', () => {
     await settle();
     expect(reviewed.needsReview.has('plain')).toBe(true);
     expect(JSON.parse(localStorage.getItem(storageKey('device', 'ompgw-needs-review'))!)).toEqual(['plain']);
+  });
+
+  it('opens kanban boards from the rail footer', async () => {
+    const { target } = render(Rail, {});
+    await settle();
+    const btn = target.querySelector<HTMLButtonElement>('button[aria-label="Kanban boards"]');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(location.hash).toBe('#/kanban');
+    location.hash = '';
   });
 });
 

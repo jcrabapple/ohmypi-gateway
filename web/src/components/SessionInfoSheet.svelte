@@ -2,6 +2,7 @@
   // Everything about the open session in one place: where it runs, what it costs, how it queues.
   import { onMount } from 'svelte';
   import { sessions as api } from '../lib/api/endpoints';
+  import type { SessionLog } from '../lib/api/types';
   import { approvalLabel } from '../lib/composer/modes';
   import { compactNumber, money, sessionTitle, uptime } from '../lib/format';
   import type { OverlayProps } from '../lib/overlays';
@@ -44,6 +45,23 @@
   );
   const usage = $derived(stats?.contextUsage ?? info?.contextUsage ?? null);
   const model = $derived(info?.model?.name ?? info?.model?.id ?? 'Not set');
+
+  // Child stderr tail (gateway-logs/<gwId>.stderr.log), loaded on demand.
+  let logData = $state<SessionLog | null>(null);
+  let logErrorsOnly = $state(false);
+  let logBusy = $state(false);
+
+  async function loadLog() {
+    if (!active.gwId) return;
+    logBusy = true;
+    try {
+      logData = await api.log(active.gwId, logErrorsOnly);
+    } catch {
+      toast('Could not read the child log');
+    } finally {
+      logBusy = false;
+    }
+  }
 </script>
 
 <Sheet open {onclose} title="Session info" size="md">
@@ -117,6 +135,31 @@
             <dd>{info.messageCount}</dd>
           </dl>
           <div class="sk" aria-hidden="true"><span class="skeleton"></span><span class="skeleton"></span></div>
+        {/if}
+      </section>
+
+      <section aria-labelledby="si-log">
+        <h3 id="si-log" class="eyebrow">Diagnostics</h3>
+        <div class="logrow">
+          <button type="button" class="btn" disabled={logBusy} onclick={loadLog}>
+            {logBusy ? 'Loading…' : logData ? 'Reload stderr' : 'Load child stderr'}
+          </button>
+          <label class="chk">
+            <input
+              type="checkbox"
+              bind:checked={logErrorsOnly}
+              disabled={logBusy || !logData}
+              onchange={loadLog}
+            />
+            errors only
+          </label>
+        </div>
+        {#if logData}
+          {#if logData.lines.length === 0}
+            <p class="dim">No {logErrorsOnly ? 'error lines' : 'output'} in the tail.</p>
+          {:else}
+            <pre class="log mono">{logData.lines.join('\n')}</pre>
+          {/if}
         {/if}
       </section>
 
@@ -205,6 +248,30 @@
     flex-wrap: wrap;
     gap: var(--s-3);
     color: var(--err);
+  }
+  .logrow {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    margin-top: var(--s-2);
+  }
+  .chk {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    color: var(--ink-2);
+    font-size: var(--fs-sm);
+  }
+  .log {
+    max-height: 30dvh;
+    overflow: auto;
+    margin: var(--s-2) 0 0;
+    padding: var(--s-2) var(--s-3);
+    background: var(--inset);
+    border-radius: var(--r-md);
+    font-size: var(--fs-xs);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   @media (max-width: 480px) {
     dl {

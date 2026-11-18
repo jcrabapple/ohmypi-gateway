@@ -5,7 +5,7 @@ import type {
   ApprovalMode, CatalogModels, CommandsResponse, EntriesResponse, EpisodicResult, EventsResponse, FileIndexEntry,
   FilesResponse, ForkResponse, FsDirs, LedgerResponse, LedgerSessionsResponse, MemoryNote, MemorySaveResult,
   MemorySearch, MemoryStats, MessagesResponse, ModelRolesChange, ModelRolesState, PluginActionResult, PluginsResponse, QueueEntry, SavedSession,
-  SearchResponse, SessionInfo, SessionsList, SessionState, SessionStats, SubagentMessagesResponse, SystemInfo,
+  SearchResponse, SessionInfo, SessionsList, SessionLog, SessionState, SessionStats, SubagentMessagesResponse, SystemInfo,
   ThinkingLevel, UiAnswer, UiRequest, UploadResult,
 } from './types';
 
@@ -100,6 +100,9 @@ export const sessions = {
     api<ForkResponse>(`${sid(id)}/fork`, { method: POST, body: { entryId }, timeoutMs: 120_000 }),
   state: (id: string, signal?: AbortSignal) => api<SessionState>(`${sid(id)}/state`, { signal }),
   stats: (id: string, signal?: AbortSignal) => api<SessionStats>(`${sid(id)}/stats`, { signal }),
+  /** Child stderr tail. `errorsOnly` keeps error/traceback lines. */
+  log: (id: string, errorsOnly: boolean, signal?: AbortSignal) =>
+    api<SessionLog>(`${sid(id)}/log${errorsOnly ? '?errors_only=true' : ''}`, { signal }),
   commands: (id: string, signal?: AbortSignal) => api<CommandsResponse>(`${sid(id)}/commands`, { signal }),
   events: (id: string, after: number, signal?: AbortSignal) =>
     api<EventsResponse>(`${sid(id)}/events?after=${after}`, { signal }),
